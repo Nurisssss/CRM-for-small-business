@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRM for Small Business - prototype</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#222;line-height:1.4}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:0 0 10px}
+  .box{border:1px solid #333;border-radius:6px;padding:16px;margin:14px 0}
+  input,button{font-size:16px;padding:7px 10px;margin:3px 0} input{border:1px solid #333;border-radius:4px}
+  button{border:1px solid #222;background:#fff;border-radius:4px;cursor:pointer} button:hover{background:#eee}
+  table{border-collapse:collapse;width:100%} th,td{border:1px solid #333;padding:6px 8px;text-align:left}
+  .msg{padding:8px 10px;border:1px solid #333;border-radius:4px;margin-top:8px} .err{border-style:dashed;font-weight:bold}
+  .top{display:flex;justify-content:space-between;align-items:center} .hidden{display:none} small{color:#555}
+</style></head><body>
+<h1>CRM for Small Business</h1><small>Prototype - record a purchase for a loyalty customer</small>
+
+<div id="loginBox" class="box">
+  <h2>Log in</h2>
+  <input id="u" placeholder="username" autocomplete="username"> <input id="p" type="password" placeholder="password" autocomplete="current-password">
+  <button onclick="login()">Log in</button>
+  <div id="loginMsg"></div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="box top"><div id="who"></div><button onclick="logout()">Log out</button></div>
+
+  <div class="box"><h2>1. Find the customer</h2>
+    <input id="phone" size="22" placeholder="+7 700 000 01 01"> <button onclick="findCustomer()">Find by phone</button>
+    <div id="custMsg"></div>
+  </div>
+
+  <div class="box"><h2>2. Add products</h2>
+    <table><thead><tr><th>Product</th><th>Price</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table>
+    <p><b>Total: <span id="total">0.00</span></b></p>
+  </div>
+
+  <div class="box"><h2>3. Card terminal (simulated) and save</h2>
+    <button onclick="pay('approved')">Payment approved</button> <button onclick="pay('declined')">Payment declined</button>
+    <div id="payMsg"></div>
+  </div>
+
+  <div id="mgr" class="box hidden"><h2>Manager reports</h2>
+    <input id="month" size="8" value="2026-10"> <button onclick="top3()">Top customers of the month</button>
+    <button onclick="check()">Check totals</button><div id="repOut"></div>
+  </div>
+</div>
+
+<script>
+let customer = null, products = [];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts));
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error || "Error "+r.status);
+  return j;
+}
+function show(id, text, isErr){ $(id).innerHTML = text ? `<div class="msg ${isErr?'err':''}">${text}</div>` : ""; }
+async function login(){
+  try{ const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:$("u").value,password:$("p").value})}); start(u); }
+  catch(e){ show("loginMsg", esc(e.message), true); }
+}
+async function start(u){
+  $("loginBox").classList.add("hidden"); $("app").classList.remove("hidden");
+  $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
+  $("mgr").classList.toggle("hidden", u.role !== "Manager");
+  products = await api("/api/products"); drawProducts();
+}
+async function logout(){ await api("/api/logout",{method:"POST",body:"{}"}); location.reload(); }
+function drawProducts(){
+  $("prod").innerHTML = products.map(p => `<tr><td>${esc(p.product_name)}</td><td>${p.price.toFixed(2)}</td><td>${p.stock_qty}</td>
+    <td><input type="number" min="0" max="100" value="0" style="width:70px" data-id="${p.product_id}" oninput="recalc()"></td></tr>`).join("");
+  recalc();
+}
+function items(){ return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); }
+function recalc(){ // display only - the server calculates the real total
+  $("total").textContent = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0).toFixed(2);
+}
+async function findCustomer(clear=true){
+  customer = null; if(clear) show("payMsg","");
+  try{ const c = await api("/api/customer?phone="+encodeURIComponent($("phone").value.trim())); customer = c;
+    show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} - loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); }
+  catch(e){ show("custMsg", esc(e.message), true); }
+}
+async function pay(result){
+  if(!customer) return show("payMsg","Find the customer first",true);
+  if(!items().length) return show("payMsg","Add at least one product",true);
+  try{
+    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result})});
+    show("payMsg", `Saved. Receipt ${esc(r.payment_ref)} - total <b>${r.total.toFixed(2)}</b> - points earned <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>`);
+    products = await api("/api/products"); drawProducts(); findCustomer(false);
+  }catch(e){ show("payMsg", esc(e.message), true); products = await api("/api/products"); drawProducts(); }
+}
+function table(rows){ if(!rows.length) return "<div class='msg'>No rows</div>";
+  const k = Object.keys(rows[0]); return "<table><tr>"+k.map(x=>`<th>${esc(x)}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+k.map(x=>`<td>${esc(r[x])}</td>`).join("")+"</tr>").join("")+"</table>"; }
+async function top3(){ try{ $("repOut").innerHTML = table(await api("/api/report/top?month="+encodeURIComponent($("month").value))); }catch(e){ show("repOut", esc(e.message), true); } }
+async function check(){ try{ const r = await api("/api/report/check"); $("repOut").innerHTML = r.mismatches.length ? table(r.mismatches) : "<div class='msg'>All totals match the item lines (0 mismatches)</div>"; }catch(e){ show("repOut", esc(e.message), true); } }
+api("/api/me").then(start).catch(()=>{});
+</script></body></html>

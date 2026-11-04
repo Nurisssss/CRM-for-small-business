@@ -1,0 +1,20 @@
+test_01_login_ok (__main__.CrmTests.test_01_login_ok) ... ok
+test_02_wrong_password_refused (__main__.CrmTests.test_02_wrong_password_refused) ... ok
+test_03_no_login_refused (__main__.CrmTests.test_03_no_login_refused) ... ok
+test_04_find_customer (__main__.CrmTests.test_04_find_customer) ... ok
+test_05_employee_does_not_see_email (__main__.CrmTests.test_05_employee_does_not_see_email) ... ok
+test_06_wrong_phone_format_refused (__main__.CrmTests.test_06_wrong_phone_format_refused) ... ok
+test_07_unknown_customer_refused (__main__.CrmTests.test_07_unknown_customer_refused) ... ok
+test_08_purchase_saved_stock_and_points (__main__.CrmTests.test_08_purchase_saved_stock_and_points) ... ok
+test_09_not_enough_stock_rolls_back (__main__.CrmTests.test_09_not_enough_stock_rolls_back) ... ok
+test_10_declined_payment_saves_nothing (__main__.CrmTests.test_10_declined_payment_saves_nothing) ... ok
+test_11_unknown_customer_purchase_refused (__main__.CrmTests.test_11_unknown_customer_purchase_refused) ... ok
+test_12_negative_quantity_refused (__main__.CrmTests.test_12_negative_quantity_refused) ... ok
+test_13_employee_cannot_open_reports (__main__.CrmTests.test_13_employee_cannot_open_reports) ... ok
+test_14_manager_top_customer_report (__main__.CrmTests.test_14_manager_top_customer_report) ... ok
+test_15_totals_check_has_no_mismatch (__main__.CrmTests.test_15_totals_check_has_no_mismatch) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 1.756s
+
+OK
