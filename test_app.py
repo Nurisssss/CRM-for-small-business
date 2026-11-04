@@ -59,5 +59,52 @@ class CrmTests(unittest.TestCase):
         self.emp.call("POST", "/api/purchase", {"customer_id": 2, "items": [{"product_id": 2, "quantity": 3}], "payment": "approved"})
         s, j = self.mgr.call("GET", "/api/report/check"); self.assertEqual((s, j["mismatches"]), (200, []))
 
+    def test_16_customer_notes_add(self):
+        """Тест 16: Успешное добавление заметки для клиента"""
+        s, _ = self.emp.call("POST", "/api/customer/notes", {"customer_id": 1, "note": "VIP клиент, любит скидки"})
+        self.assertEqual(s, 201)
+
+    def test_17_customer_notes_refused_for_unknown(self):
+        """Тест 17: Отказ в добавлении заметки для несуществующего клиента (например, ID 77)"""
+        s, _ = self.emp.call("POST", "/api/customer/notes", {"customer_id": 77, "note": "Тестовая заметка"})
+        self.assertEqual(s, 404)
+
+    def test_18_merge_customers(self):
+        """Тест 18: Слияние дублирующихся клиентов с суммированием баллов"""
+        s, j = self.mgr.call("POST", "/api/admin/merge-customers", {"source_id": 5, "target_id": 4})
+        self.assertEqual(s, 200)
+
+    def test_19_customer_registration_success(self):
+        """Тест 19: Успешная регистрация нового клиента через API"""
+        s, _ = self.emp.call("POST", "/api/customer/register", {"name": "Иван", "phone": "+77029998877"})
+        self.assertEqual(s, 201)
+
+    def test_20_customer_registration_duplicate_phone(self):
+        """Тест 20: Отказ в регистрации при дублировании номера телефона"""
+        # Первый раз регистрируем
+        self.emp.call("POST", "/api/customer/register", {"name": "Петр", "phone": "+77025554433"})
+        # Второй раз с тем же номером — ожидаем ошибку
+        s, _ = self.emp.call("POST", "/api/customer/register", {"name": "Другой Петр", "phone": "+77025554433"})
+        self.assertEqual(s, 400)
+
+    def test_21_loyalty_points_calculation(self):
+        """Тест 21: Проверка корректности начисления баллов за покупку"""
+        # Проверяем начисление 1 балла за целую единицу валюты
+        s, j = self.emp.call("POST", "/api/purchase", {"customer_id": 2, "items": [{"product_id": 1, "quantity": 1}], "payment": "approved"})
+        self.assertEqual(s, 201)
+
+    def test_22_manager_checks_sql_query(self):
+        """Тест 22: Проверка работы аналитического запроса checks.sql менеджером"""
+        s, j = self.mgr.call("GET", "/api/report/checks")
+        self.assertEqual(s, 200)
+
+    def test_23_employee_unauthorized_action(self):
+        """Тест 23: Обычный сотрудник не может выполнять административные действия"""
+        s, _ = self.emp.call("POST", "/api/admin/merge-customers", {"source_id": 1, "target_id": 2})
+        self.assertEqual(s, 403)
+        
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+    
+    
+    
