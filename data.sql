@@ -36,3 +36,6 @@ INSERT INTO Customer_Note (customer_id, employee_id, note_text) VALUES
   (1, 1, 'Prefers to be contacted by phone, not email.'),
   (2, 1, 'Asked about a discount for bulk orders.'),
   (3, 1, 'Complained about a late delivery; offered 50 bonus points.');
+-- Error
+INSERT INTO Customer_Note (customer_id, employee_id, note_text)
+VALUES (77, 1, 'This note should be refused.');
