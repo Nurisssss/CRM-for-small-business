@@ -45,3 +45,10 @@ CREATE TABLE Customer_Note (
   created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+
+-- Shows three rows
+SELECT * FROM Customer_Note; 
+
+
+-- still three rows
+SELECT COUNT(*) FROM Customer_Note;
