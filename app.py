@@ -1,6 +1,4 @@
-"""CRM for Small Business - prototype (Week 10).
-Only the Python standard library is used. Run:  python app.py   then open http://localhost:8000
-Main process: employee logs in -> finds customer by phone -> adds products -> card terminal result
+"""Main process: employee logs in -> finds customer by phone -> adds products -> card terminal result
 -> purchase saved in ONE transaction (stock and loyalty points updated, or everything rolled back).
 """
 import hashlib, json, os, re, secrets, sqlite3

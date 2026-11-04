@@ -1,0 +1,149 @@
+:root {
+  --primary-color: #2563eb;
+  --primary-hover: #1d4ed8;
+  --bg-color: #f3f4f6;
+  --card-bg: #ffffff;
+  --text-main: #1f2937;
+  --text-muted: #6b7280;
+  --border-color: #e5e7eb;
+  --error-bg: #fef2f2;
+  --error-border: #ef4444;
+  --error-text: #b91c1c;
+  --success-bg: #f0fdf4;
+  --success-border: #22c55e;
+  --success-text: #15803d;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-main);
+  max-width: 900px;
+  margin: 40px auto;
+  padding: 0 20px;
+  line-height: 1.5;
+}
+
+header {
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 0 0 8px 0;
+  color: #111827;
+}
+
+h2 {
+  font-size: 18px;
+  margin: 0 0 16px 0;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 2px solid var(--border-color);
+  padding-bottom: 8px;
+}
+
+small {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.box {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+  font-size: 15px;
+  padding: 10px 12px;
+  margin: 4px 8px 4px 0;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+button {
+  font-size: 15px;
+  font-weight: 500;
+  padding: 10px 16px;
+  margin: 4px 4px 4px 0;
+  border: none;
+  background-color: var(--primary-color);
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+button:hover {
+  background-color: var(--primary-hover);
+}
+
+button.secondary {
+  background-color: white;
+  color: var(--text-main);
+  border: 1px solid #d1d5db;
+}
+
+button.secondary:hover {
+  background-color: #f9fafb;
+}
+
+button.danger {
+  background-color: white;
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
+}
+
+button.danger:hover {
+  background-color: var(--error-bg);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+th, td {
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 16px;
+  text-align: left;
+}
+
+th {
+  background-color: #f9fafb;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+tr:hover {
+  background-color: #f9fafb;
+}
+
+.msg {
+  padding: 12px 16px;
+  background-color: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success-text);
+  border-radius: 6px;
+  margin-top:
