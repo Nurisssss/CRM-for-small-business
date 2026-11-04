@@ -26,3 +26,13 @@ INSERT INTO Purchase_Item VALUES (6,1,1,18.00);
 INSERT INTO Purchase_Item VALUES (7,1,1,18.00);
 INSERT INTO Purchase_Item VALUES (7,2,1,6.50);
 INSERT INTO Purchase_Item VALUES (8,2,1,6.50);
+INSERT INTO Employee (employee_id, full_name, role, username, password_hash)
+VALUES (1, 'Aknur Ryskul', 'Manager', 'aknur', 'hash_placeholder');
+INSERT INTO Customer (customer_id, full_name, phone, email, loyalty_points, last_updated) VALUES
+  (1, 'Dana Sadykova', '+7 701 111 22 33', 'dana@mail.kz', 0, '2026-11-04'),
+  (2, 'Arman Kenzhebek', '+7 702 222 33 44', NULL, 0, '2026-11-04'),
+  (3, 'Aigerim Bekova', '+7 705 333 44 55', 'aigerim@mail.kz', 0, '2026-11-04');
+INSERT INTO Customer_Note (customer_id, employee_id, note_text) VALUES
+  (1, 1, 'Prefers to be contacted by phone, not email.'),
+  (2, 1, 'Asked about a discount for bulk orders.'),
+  (3, 1, 'Complained about a late delivery; offered 50 bonus points.');
