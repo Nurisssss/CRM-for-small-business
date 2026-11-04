@@ -37,3 +37,11 @@ CREATE TABLE Purchase_Item (
   unit_price  DECIMAL(10,2) NOT NULL CHECK (unit_price > 0),
   PRIMARY KEY (purchase_id, product_id)
 );
+CREATE TABLE Customer_Note (
+  note_id      INTEGER PRIMARY KEY,
+  customer_id  INTEGER      NOT NULL REFERENCES Customer(customer_id),
+  employee_id  INTEGER      NOT NULL REFERENCES Employee(employee_id),
+  note_text    VARCHAR(255) NOT NULL CHECK (length(trim(note_text)) > 0),
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
