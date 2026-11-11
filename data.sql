@@ -3,7 +3,8 @@ INSERT INTO Customer (customer_id, full_name, phone, email, loyalty_points, last
 (2, 'Dana Serik', '+7 700 000 01 02', 'dana@example.com', 72, '2026-10-22'),
 (3, 'Timur Bek', '+7 700 000 01 03', NULL, 18, '2026-10-15'),
 (4, 'Madina Omar', '+7 700 000 01 04', 'madina@example.com', 18, '2026-09-28'),
-(77, 'Test Refused Customer', '+7 700 000 77 77', 'refused@example.com', 0, '2026-11-04');
+(77, 'Test Refused Customer', '+7 700 000 77 77', 'refused@example.com', 0, '2026-11-04'),
+(5, 'Madina Omar', '+7 701 555 04 04', NULL, 6, '2026-11-05');   -- DUPLICATE of customer 4: she changed her phone, a new profile was made
 
 INSERT INTO Employee (employee_id, full_name, role, username, password_hash) VALUES 
 (1, 'Aknur K.', 'Employee', 'aknur', 'hash1'),
@@ -22,7 +23,8 @@ INSERT INTO Purchase (purchase_id, customer_id, employee_id, purchase_date, tota
 (5, 1, 1, '2026-10-20 10:30', 4.00, 'approved', 'TX1005'),
 (6, 4, 1, '2026-09-28 13:00', 18.00, 'approved', 'TX0998'),
 (7, 2, 1, '2026-10-22 16:45', 24.50, 'approved', 'TX1006'),
-(8, 3, 1, '2026-10-25 18:20', 6.50, 'declined', 'TX1007');
+(8, 3, 1, '2026-10-25 18:20', 6.50, 'declined', 'TX1007'),
+(9, 5, 1, '2026-11-05 12:15', 6.50, 'approved', 'TX1008');   -- bought under the duplicate profile 5
 
 INSERT INTO Purchase_Item (purchase_id, product_id, quantity, unit_price) VALUES 
 (1, 1, 2, 18.00),
@@ -36,10 +38,12 @@ INSERT INTO Purchase_Item (purchase_id, product_id, quantity, unit_price) VALUES
 (6, 1, 1, 18.00),
 (7, 1, 1, 18.00),
 (7, 2, 1, 6.50),
-(8, 2, 1, 6.50);
+(8, 2, 1, 6.50),
+(9, 2, 1, 6.50);
 
 INSERT INTO Customer_Note (customer_id, employee_id, note_text) VALUES 
 (1, 1, 'Prefers to be contacted by phone, not email.'),
 (2, 1, 'Asked about a discount for bulk orders.'),
 (3, 1, 'Complained about a late delivery; offered 50 bonus points.'),
-(77, 1, 'This note should be refused.');
+(77, 1, 'This note should be refused.'),
+(5, 1, 'Says she changed her phone number; old profile not found at the till.');
