@@ -37,6 +37,16 @@ CREATE TABLE Purchase_Item (
   unit_price  DECIMAL(10,2) NOT NULL CHECK (unit_price > 0),
   PRIMARY KEY (purchase_id, product_id)
 );
+-- Points ledger (Week 11): every change of loyalty_points is one row. The newer app.py creates the same table.
+-- Needed by merge_customers.sql (the history moves to the kept profile) and by check.sql CHECK 2.
+CREATE TABLE Points_Log (
+  log_id        INTEGER PRIMARY KEY,
+  customer_id   INTEGER      NOT NULL REFERENCES Customer(customer_id),
+  purchase_id   INTEGER      REFERENCES Purchase(purchase_id),
+  points_change INTEGER      NOT NULL CHECK (points_change <> 0),
+  reason        VARCHAR(12)  NOT NULL CHECK (reason IN ('opening','earned','spent','correction')),
+  created_at    TIMESTAMP    NOT NULL
+);
 CREATE TABLE Customer_Note (
   note_id      INTEGER PRIMARY KEY,
   customer_id  INTEGER      NOT NULL REFERENCES Customer(customer_id),
