@@ -1,9 +1,11 @@
-"""Main process: employee logs in -> finds customer by phone -> adds products (optionally pays part of the bill with bonus points)
--> card terminal result -> purchase saved in ONE transaction (stock, bonus points and the points ledger updated, or everything rolled back).
+"""CRM for Small Business - prototype (Week 10).
+Only the Python standard library is used. Run:  python app.py   then open http://localhost:8000
+Main process: employee logs in -> finds customer by phone -> adds products -> card terminal result
+-> purchase saved in ONE transaction (stock and loyalty points updated, or everything rolled back).
 """
 import hashlib, json, os, re, secrets, sqlite3
 from datetime import datetime
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -11,14 +13,9 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("CRM_DB", os.path.join(BASE, "crm.db"))
 PHONE_RE = re.compile(r"^\+7 \d{3} \d{3} \d{2} \d{2}$")   # Kazakhstan format: +7 XXX XXX XX XX
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")              # login name: small letters, digits, underscore
 SESSIONS = {}          # session id -> {"employee_id", "username", "role"}
-
-# ---------- loyalty points rules (change the numbers here; everything else uses these constants) ----------
-# All money is in US dollars ($). Points are small on purpose: 1 point = 1 cent, so a normal purchase earns a visible number of points.
-POINTS_RATE = Decimal("0.03")            # cashback: 3 % of the money PAID IN MONEY comes back as points (not on the part paid with points)
-POINT_VALUE = Decimal("0.01")            # 1 point is worth $0.01 when spent (100 points = $1)
-MAX_REDEEM_SHARE = Decimal("0.30")       # points may pay at most 30 % of one bill
-MAX_EARN_PER_PURCHASE = 5000             # safety cap: one purchase never earns more than 5000 points (= $50)
+POINTS_RULE = 1        # 1 loyalty point for every whole currency unit spent (team rule, to be confirmed)
 
 
 class ApiError(Exception):
@@ -44,35 +41,16 @@ def connect():
     db.row_factory = sqlite3.Row
     return db
 
-LEDGER_DDL = """CREATE TABLE IF NOT EXISTS Points_Log (
-  log_id        INTEGER PRIMARY KEY,
-  customer_id   INTEGER      NOT NULL REFERENCES Customer(customer_id),
-  purchase_id   INTEGER      REFERENCES Purchase(purchase_id),
-  points_change INTEGER      NOT NULL CHECK (points_change <> 0),
-  reason        VARCHAR(12)  NOT NULL CHECK (reason IN ('opening','earned','spent','correction')),
-  created_at    TIMESTAMP    NOT NULL
-)"""
-
-def ensure_points_log():
-    """Runs at every start. Creates the Points_Log table if it is missing (old crm.db, or schema.sql without it),
-    and if the ledger is empty, turns every current balance into an 'opening' row, so balance = sum of the ledger from day one."""
-    db = connect()
-    db.execute(LEDGER_DDL)
-    if db.execute("SELECT COUNT(*) FROM Points_Log").fetchone()[0] == 0:
-        db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) "
-                   "SELECT customer_id, NULL, loyalty_points, 'opening', datetime('now') FROM Customer WHERE loyalty_points > 0")
-    db.close()
-
 def init_db():
-    if not os.path.exists(DB_PATH):
-        db = connect()
-        with open(os.path.join(BASE, "schema.sql")) as f: db.executescript(f.read())
-        with open(os.path.join(BASE, "data.sql")) as f: db.executescript(f.read())
-        # demo accounts (change these passwords before any real use)
-        db.execute("UPDATE Employee SET password_hash=? WHERE username='aruzhan'", (hash_pw("cashier123"),))
-        db.execute("UPDATE Employee SET password_hash=? WHERE username='daniyar'", (hash_pw("manager123"),))
-        db.close()
-    ensure_points_log()
+    if os.path.exists(DB_PATH):
+        return
+    db = connect()
+    with open(os.path.join(BASE, "schema.sql")) as f: db.executescript(f.read())
+    with open(os.path.join(BASE, "data.sql")) as f: db.executescript(f.read())
+    # demo accounts (change these passwords before any real use)
+    db.execute("UPDATE Employee SET password_hash=? WHERE username='aruzhan'", (hash_pw("cashier123"),))
+    db.execute("UPDATE Employee SET password_hash=? WHERE username='daniyar'", (hash_pw("manager123"),))
+    db.close()
 
 
 # ---------- business functions ----------
@@ -86,6 +64,63 @@ def login(data):
     sid = secrets.token_urlsafe(24)
     SESSIONS[sid] = {"employee_id": row["employee_id"], "username": row["username"], "role": row["role"], "name": row["full_name"]}
     return sid, SESSIONS[sid]
+
+# ---------- users: registration, adding users, passwords (Week 11) ----------
+def validate_password(pw):
+    if not isinstance(pw, str) or len(pw) < 8 or len(pw) > 72:
+        raise ApiError(400, "Password must be 8-72 characters")
+    if not (re.search(r"[A-Za-z]", pw) and re.search(r"\d", pw)):
+        raise ApiError(400, "Password must contain at least one letter and one digit")
+
+def add_user(data, role):
+    """Creates an Employee row. Used by public registration (role always Employee) and by a Manager (Employee or Manager)."""
+    name = str(data.get("full_name", "")).strip()
+    username = str(data.get("username", "")).strip().lower()
+    password = data.get("password", "")
+    if not (2 <= len(name) <= 80):
+        raise ApiError(400, "Full name must be 2-80 characters")
+    if not USERNAME_RE.match(username):
+        raise ApiError(400, "Username: 3-30 characters, small letters, digits or _")
+    validate_password(password)
+    db = connect()
+    try:
+        if db.execute("SELECT 1 FROM Employee WHERE username=?", (username,)).fetchone():
+            raise ApiError(409, "This username is already taken")
+        cur = db.execute("INSERT INTO Employee (full_name, role, username, password_hash) VALUES (?,?,?,?)",
+                         (name, role, username, hash_pw(password)))
+        return {"employee_id": cur.lastrowid, "username": username, "full_name": name, "role": role}
+    finally:
+        db.close()
+
+def register(data):                                   # public: anyone can create an Employee account
+    return add_user(data, "Employee")
+
+def create_user(user, data):                          # Manager only: choose the role
+    require_manager(user)
+    role = data.get("role", "Employee")
+    if role not in ("Employee", "Manager"):
+        raise ApiError(400, "role must be 'Employee' or 'Manager'")
+    return add_user(data, role)
+
+def list_users(user):
+    require_manager(user)
+    db = connect()
+    rows = [dict(r) for r in db.execute("SELECT employee_id, full_name, username, role FROM Employee ORDER BY employee_id")]
+    db.close(); return rows                           # password_hash is never sent to the browser
+
+def change_password(user, data):
+    old, new = data.get("current_password", ""), data.get("new_password", "")
+    validate_password(new)
+    db = connect()
+    try:
+        row = db.execute("SELECT password_hash FROM Employee WHERE employee_id=?", (user["employee_id"],)).fetchone()
+        if not row or not check_pw(str(old), row["password_hash"]):
+            raise ApiError(403, "Current password is wrong")
+        db.execute("UPDATE Employee SET password_hash=? WHERE employee_id=?", (hash_pw(new), user["employee_id"]))
+        return {"ok": True}
+    finally:
+        db.close()
+
 
 def find_customer(user, phone):
     if not PHONE_RE.match(phone or ""):
@@ -105,14 +140,6 @@ def list_products():
     rows = [dict(r) for r in db.execute("SELECT product_id, product_name, price, stock_qty FROM Product ORDER BY product_id")]
     db.close(); return rows
 
-def whole(amount):
-    """Cut an amount down to a whole number (no rounding up, so the shop never gives more than the rule says)."""
-    return int(Decimal(amount).to_integral_value(rounding=ROUND_DOWN))
-
-def points_rules():
-    return {"points_rate": str(POINTS_RATE), "point_value": str(POINT_VALUE),
-            "max_redeem_share": str(MAX_REDEEM_SHARE), "max_earn_per_purchase": MAX_EARN_PER_PURCHASE}
-
 def record_purchase(user, data):
     try:
         customer_id = int(data.get("customer_id"))
@@ -128,14 +155,6 @@ def record_purchase(user, data):
         raise ApiError(400, "Send customer_id and a list of items with product_id and quantity (1-100)")
     if pay not in ("approved", "declined"):
         raise ApiError(400, "payment must be 'approved' or 'declined'")
-    raw_pts = data.get("points_to_use", 0)
-    if raw_pts is None: raw_pts = 0
-    try:
-        if isinstance(raw_pts, bool) or not isinstance(raw_pts, (int, str)): raise ValueError
-        points_use = int(raw_pts)
-        if points_use < 0: raise ValueError
-    except ValueError:
-        raise ApiError(400, "points_to_use must be a whole number, 0 or more")
 
     db = connect()
     try:
@@ -148,10 +167,6 @@ def record_purchase(user, data):
             if not p: raise ApiError(404, f"Product {pid} not found")
             price = Decimal(str(p["price"])); total += price * qty
             lines.append((pid, qty, price, p["product_name"]))
-        max_by_share = whole(total * MAX_REDEEM_SHARE / POINT_VALUE)
-        if points_use > max_by_share:                     # rule: points pay at most MAX_REDEEM_SHARE of the bill
-            raise ApiError(400, f"Points can pay at most {int(MAX_REDEEM_SHARE * 100)}% of the bill (max {max_by_share} points for this purchase)")
-        to_pay = total - POINT_VALUE * points_use         # the part of the bill paid in money
         ref = "TX" + secrets.token_hex(4).upper()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         # step 1: save Purchase
@@ -165,44 +180,21 @@ def record_purchase(user, data):
         for pid, qty, _, name in lines:
             if db.execute("UPDATE Product SET stock_qty = stock_qty - ? WHERE product_id=? AND stock_qty >= ?", (qty, pid, qty)).rowcount == 0:
                 raise ApiError(409, f"Not enough stock for {name}")
-        # step 4: spend bonus points (atomic: the UPDATE only works when the customer has enough points)
-        if points_use:
-            if db.execute("UPDATE Customer SET loyalty_points = loyalty_points - ? WHERE customer_id=? AND loyalty_points >= ?",
-                          (points_use, customer_id, points_use)).rowcount == 0:
-                raise ApiError(409, "Not enough bonus points")
-            db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) VALUES (?,?,?,?,?)",
-                       (customer_id, pid_new, -points_use, "spent", now))
-        # step 5: payment result from the (simulated) card terminal - on "declined" the rollback also gives the points back
+        # step 4: payment result from the (simulated) card terminal
         if pay == "declined":
             raise ApiError(402, "Payment declined - nothing was saved")
-        # step 6: earn points on the money actually paid (not on the part paid with points)
-        earned = min(MAX_EARN_PER_PURCHASE, whole(to_pay * POINTS_RATE / POINT_VALUE))
+        # step 5: loyalty points
+        earned = int(total) * POINTS_RULE
         db.execute("UPDATE Customer SET loyalty_points = loyalty_points + ?, last_updated = ? WHERE customer_id=?", (earned, now[:10], customer_id))
-        if earned:
-            db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) VALUES (?,?,?,?,?)",
-                       (customer_id, pid_new, earned, "earned", now))
         db.execute("COMMIT")
         points = db.execute("SELECT loyalty_points FROM Customer WHERE customer_id=?", (customer_id,)).fetchone()[0]
-        return {"purchase_id": pid_new, "payment_ref": ref, "total": float(total), "points_used": points_use, "amount_to_pay": float(to_pay),
-                "points_earned": earned, "loyalty_points": points,
+        return {"purchase_id": pid_new, "payment_ref": ref, "total": float(total), "points_earned": earned, "loyalty_points": points,
                 "lines": [{"product": n, "quantity": q, "unit_price": float(p)} for _, q, p, n in lines]}
     except Exception:
-        db.execute("ROLLBACK")                            # undo every step if anything failed
+        db.execute("ROLLBACK")                            # undo steps 1-3 if anything failed
         raise
     finally:
         db.close()
-
-def points_history(customer_id):
-    """Last 10 changes of the points balance of one customer (from the ledger), newest first."""
-    try:
-        cid = int(customer_id)
-    except (TypeError, ValueError):
-        raise ApiError(400, "customer_id must be a number")
-    db = connect()
-    if not db.execute("SELECT 1 FROM Customer WHERE customer_id=?", (cid,)).fetchone():
-        db.close(); raise ApiError(404, "Customer not found")
-    rows = [dict(r) for r in db.execute("SELECT created_at, points_change, reason, purchase_id FROM Points_Log WHERE customer_id=? ORDER BY log_id DESC LIMIT 10", (cid,))]
-    db.close(); return rows
 
 def require_manager(user):
     if user["role"] != "Manager":
@@ -267,15 +259,18 @@ class Handler(BaseHTTPRequestHandler):
                 sid, s = login(self._body())
                 return self._send(200, {"username": s["username"], "role": s["role"], "name": s["name"]},
                                   {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
+            if method == "POST" and u.path == "/api/register":
+                return self._send(201, register(self._body()))
             user = self._user()
             if method == "POST" and u.path == "/api/logout":
                 for k in [k for k, v in SESSIONS.items() if v is user]: del SESSIONS[k]
                 return self._send(200, {"ok": True}, {"Set-Cookie": "sid=; Max-Age=0; Path=/"})
             if method == "GET" and u.path == "/api/me": return self._send(200, user)
+            if method == "POST" and u.path == "/api/password": return self._send(200, change_password(user, self._body()))
+            if method == "POST" and u.path == "/api/users": return self._send(201, create_user(user, self._body()))
+            if method == "GET" and u.path == "/api/users": return self._send(200, list_users(user))
             if method == "GET" and u.path == "/api/customer": return self._send(200, find_customer(user, q.get("phone")))
             if method == "GET" and u.path == "/api/products": return self._send(200, list_products())
-            if method == "GET" and u.path == "/api/rules": return self._send(200, points_rules())
-            if method == "GET" and u.path == "/api/points-log": return self._send(200, points_history(q.get("customer_id")))
             if method == "POST" and u.path == "/api/purchase": return self._send(201, record_purchase(user, self._body()))
             if method == "GET" and u.path == "/api/report/top": return self._send(200, report_top(user, q.get("month")))
             if method == "GET" and u.path == "/api/report/check": return self._send(200, report_check(user))
