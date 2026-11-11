@@ -1,251 +1,144 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CRM for Small Business - prototype</title>
-  <style>
-    /* Modern SaaS Reset */
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
-    body { background-color: #f1f5f9; color: #334155; line-height: 1.5; padding: 24px 16px; }
-    
-    /* Dashboard Container */
-    .container { max-width: 900px; margin: 0 auto; }
-    
-    /* Header */
-    header { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #e2e8f0; }
-    h1 { font-size: 26px; color: #0f172a; margin-bottom: 4px; font-weight: 700; }
-    h2 { font-size: 14px; color: #64748b; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
-    small { color: #64748b; font-size: 14px; }
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRM for Small Business - prototype</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#222;line-height:1.4}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:0 0 10px}
+  .box{border:1px solid #333;border-radius:6px;padding:16px;margin:14px 0}
+  input,button{font-size:16px;padding:7px 10px;margin:3px 0} input{border:1px solid #333;border-radius:4px}
+  button{border:1px solid #222;background:#fff;border-radius:4px;cursor:pointer} button:hover{background:#eee}
+  table{border-collapse:collapse;width:100%} th,td{border:1px solid #333;padding:6px 8px;text-align:left}
+  .msg{padding:8px 10px;border:1px solid #333;border-radius:4px;margin-top:8px} .err{border-style:dashed;font-weight:bold}
+  .top{display:flex;justify-content:space-between;align-items:center} .hidden{display:none} small{color:#555}
+</style></head><body>
+<h1>CRM for Small Business</h1><small>Prototype - record a purchase for a loyalty customer</small>
 
-    /* Cards / Boxes */
-    .box { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    .top { display: flex; justify-content: space-between; align-items: center; background: #0f172a; color: white; padding: 16px 24px; border-radius: 8px; margin-bottom: 24px; }
-    .top button { border-color: transparent; }
-    
-    /* Inputs & Buttons */
-    input { font-size: 14px; padding: 10px 12px; margin: 0 8px 8px 0; border: 1px solid #cbd5e1; border-radius: 6px; outline: none; transition: 0.2s; }
-    input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
-    
-    button { font-size: 14px; font-weight: 600; padding: 10px 16px; border: none; background: #3b82f6; color: white; border-radius: 6px; cursor: pointer; transition: 0.2s; margin: 0 4px 8px 0; }
-    button:hover { background: #2563eb; }
-    button.secondary { background: #f8fafc; color: #475569; border: 1px solid #cbd5e1; }
-    button.secondary:hover { background: #f1f5f9; }
-    button.danger { background: #fef2f2; color: #ef4444; border: 1px solid #fecaca; }
-    button.danger:hover { background: #fee2e2; }
+<div id="loginBox" class="box">
+  <h2>Log in</h2>
+  <input id="u" placeholder="username" autocomplete="username"> <input id="p" type="password" placeholder="password" autocomplete="current-password">
+  <button onclick="login()">Log in</button>
+  <div id="loginMsg"></div>
+  <p><small>No account? <a href="#" onclick="toggleReg(true);return false">Register</a></small></p>
+</div>
 
-    /* Tables */
-    table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-    th, td { border-bottom: 1px solid #e2e8f0; padding: 12px; text-align: left; font-size: 14px; }
-    th { background: #f8fafc; color: #64748b; font-weight: 600; }
-    tr:hover { background: #f8fafc; }
-    
-    /* Utility */
-    .hidden { display: none !important; }
-    .msg { padding: 12px 16px; background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; border-radius: 6px; margin-top: 12px; font-size: 14px; }
-    .msg.err { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-    #total { font-size: 24px; color: #0f172a; }
-    .total-row { margin-top: 16px; padding-top: 16px; border-top: 2px dashed #e2e8f0; }
-  </style>
-</head>
-<body>
+<div id="regBox" class="box hidden">
+  <h2>Register a new account</h2>
+  <input id="rn" placeholder="full name" autocomplete="name"> <input id="ru" placeholder="username (a-z, 0-9, _)" autocomplete="username"><br>
+  <input id="rp" type="password" placeholder="password (8+, letter and digit)" autocomplete="new-password" size="30">
+  <input id="rp2" type="password" placeholder="repeat password" autocomplete="new-password">
+  <button onclick="register()">Create account</button>
+  <div id="regMsg"></div>
+  <p><small>New accounts get the Employee role. <a href="#" onclick="toggleReg(false);return false">Back to log in</a></small></p>
+</div>
 
-<div class="container">
-  <header>
-    <h1>CRM for Small Business</h1>
-    <small>Prototype - record a purchase for a loyalty customer</small>
-  </header>
+<div id="app" class="hidden">
+  <div class="box top"><div id="who"></div><div><button onclick="$('pwBox').classList.toggle('hidden')">Change password</button> <button onclick="logout()">Log out</button></div></div>
 
-  <div id="loginBox" class="box">
-    <h2>System Access</h2>
-    <input id="u" placeholder="username" autocomplete="username"> 
-    <input id="p" type="password" placeholder="password" autocomplete="current-password">
-    <button onclick="login()">Log in</button>
-    <div id="loginMsg"></div>
+  <div id="pwBox" class="box hidden"><h2>Change my password</h2>
+    <input id="cp" type="password" placeholder="current password" autocomplete="current-password">
+    <input id="np" type="password" placeholder="new password" autocomplete="new-password">
+    <input id="np2" type="password" placeholder="repeat new password" autocomplete="new-password">
+    <button onclick="changePw()">Save password</button><div id="pwMsg"></div>
   </div>
 
-  <div id="app" class="hidden">
-    <div class="top">
-      <div id="who"></div>
-      <button class="secondary" onclick="logout()">Log out</button>
-    </div>
+  <div class="box"><h2>1. Find the customer</h2>
+    <input id="phone" size="22" placeholder="+7 700 000 01 01"> <button onclick="findCustomer()">Find by phone</button>
+    <div id="custMsg"></div>
+  </div>
 
-    <div class="box">
-      <h2>1. Find the customer</h2>
-      <input id="phone" size="22" placeholder="+7 700 000 01 01"> 
-      <button onclick="findCustomer()">Search by Phone</button>
-      <div id="custMsg"></div>
-      <div id="hist"></div>
-    </div>
+  <div class="box"><h2>2. Add products</h2>
+    <table><thead><tr><th>Product</th><th>Price</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table>
+    <p><b>Total: <span id="total">0.00</span></b></p>
+  </div>
 
-    <div class="box">
-      <h2>2. Build Order</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Product</th>
-            <th>Price ($)</th>
-            <th>In stock</th>
-            <th>Quantity</th>
-          </tr>
-        </thead>
-        <tbody id="prod"></tbody>
-      </table>
-      <div class="total-row">
-        <p><b>Total: $<span id="total">0.00</span></b></p>
-        <p>Use bonus points: <input id="usePts" type="number" min="0" value="0" style="width:100px" oninput="recalc()"> <small id="ptsHint">(find the customer first)</small></p>
-        <p><b>To pay in money: $<span id="toPay">0.00</span></b></p>
-      </div>
-    </div>
+  <div class="box"><h2>3. Card terminal (simulated) and save</h2>
+    <button onclick="pay('approved')">Payment approved</button> <button onclick="pay('declined')">Payment declined</button>
+    <div id="payMsg"></div>
+  </div>
 
-    <div class="box">
-      <h2>3. Checkout Terminal</h2>
-      <button onclick="pay('approved')">Approve Payment</button> 
-      <button class="danger" onclick="pay('declined')">Decline Payment</button>
-      <div id="payMsg"></div>
-    </div>
+  <div id="mgr" class="box hidden"><h2>Manager reports</h2>
+    <input id="month" size="8" value="2026-10"> <button onclick="top3()">Top customers of the month</button>
+    <button onclick="check()">Check totals</button><div id="repOut"></div>
+  </div>
 
-    <div id="mgr" class="box hidden">
-      <h2>Manager Dashboard</h2>
-      <input id="month" size="10" value="2026-10"> 
-      <button class="secondary" onclick="top3()">Top Customers</button>
-      <button class="secondary" onclick="check()">Reconcile Totals</button>
-      <div id="repOut"></div>
-    </div>
+  <div id="usr" class="box hidden"><h2>Manager: users</h2>
+    <input id="an" placeholder="full name"> <input id="au" placeholder="username"> <input id="ap" type="password" placeholder="password" autocomplete="new-password">
+    <select id="ar" style="font-size:16px;padding:7px"><option>Employee</option><option>Manager</option></select>
+    <button onclick="addUser()">Add user</button> <button onclick="listUsers()">Show all users</button>
+    <div id="usrMsg"></div><div id="usrOut"></div>
   </div>
 </div>
 
 <script>
-let customer = null, products = [], rules = null;
+let customer = null, products = [];
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-
 async function api(path, opts){
   const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts));
   const j = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.error || "Error "+r.status);
   return j;
 }
-
-function show(id, text, isErr){ 
-  $(id).innerHTML = text ? `<div class="msg ${isErr?'err':''}">${text}</div>` : ""; 
-}
-
+function show(id, text, isErr){ $(id).innerHTML = text ? `<div class="msg ${isErr?'err':''}">${text}</div>` : ""; }
 async function login(){
-  try{ 
-    const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:$("u").value,password:$("p").value})}); 
-    start(u); 
-  } catch(e){ 
-    show("loginMsg", esc(e.message), true); 
-  }
+  try{ const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:$("u").value,password:$("p").value})}); start(u); }
+  catch(e){ show("loginMsg", esc(e.message), true); }
 }
-
 async function start(u){
-  $("loginBox").classList.add("hidden"); 
-  $("app").classList.remove("hidden");
+  $("loginBox").classList.add("hidden"); $("app").classList.remove("hidden");
   $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
-  $("mgr").classList.toggle("hidden", u.role !== "Manager");
-  products = await api("/api/products"); 
-  rules = await api("/api/rules"); 
-  drawProducts();
+  $("mgr").classList.toggle("hidden", u.role !== "Manager"); $("usr").classList.toggle("hidden", u.role !== "Manager");
+  products = await api("/api/products"); drawProducts();
 }
-
-async function logout(){ 
-  await api("/api/logout",{method:"POST",body:"{}"}); 
-  location.reload(); 
-}
-
+async function logout(){ await api("/api/logout",{method:"POST",body:"{}"}); location.reload(); }
 function drawProducts(){
-  $("prod").innerHTML = products.map(p => `
-    <tr>
-      <td>${esc(p.product_name)}</td>
-      <td>$${p.price.toFixed(2)}</td>
-      <td>${p.stock_qty} units</td>
-      <td><input type="number" min="0" max="100" value="0" style="width:80px" data-id="${p.product_id}" oninput="recalc()"></td>
-    </tr>`).join("");
+  $("prod").innerHTML = products.map(p => `<tr><td>${esc(p.product_name)}</td><td>${p.price.toFixed(2)}</td><td>${p.stock_qty}</td>
+    <td><input type="number" min="0" max="100" value="0" style="width:70px" data-id="${p.product_id}" oninput="recalc()"></td></tr>`).join("");
   recalc();
 }
-
-function items(){ 
-  return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); 
-}
-
-function recalc(){ // display only - the server calculates the real total, the real limit and the real points
-  const total = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0);
-  $("total").textContent = total.toFixed(2);
-  const value = rules ? parseFloat(rules.point_value) : 1, share = rules ? parseFloat(rules.max_redeem_share) : 0;
-  const maxByShare = Math.floor(Math.round(total*100)*share/Math.round(value*100) + 1e-6);   // whole cents, same as the server
-  const maxUse = customer ? Math.max(0, Math.min(customer.loyalty_points, maxByShare)) : 0;
-  $("ptsHint").textContent = customer ? `(max ${maxUse} points now: balance ${customer.loyalty_points} = $${(customer.loyalty_points*value).toFixed(2)}, limit ${Math.round(share*100)}% of the bill; 100 points = $1)` : "(find the customer first)";
-  const use = Math.max(0, parseInt($("usePts").value || "0", 10) || 0);
-  $("toPay").textContent = Math.max(0, total - use*value).toFixed(2);
-}
-async function loadHistory(id){   // points history: every earn (+) and every spend (-) of this customer
-  try{ const rows = await api("/api/points-log?customer_id="+id);
-    $("hist").innerHTML = rows.length ? "<p><small>Points history (newest first)</small></p><table><tr><th>When</th><th>Change</th><th>Reason</th><th>Purchase</th></tr>"
-      + rows.map(r=>`<tr><td>${esc(r.created_at)}</td><td>${r.points_change>0?"+":""}${r.points_change}</td><td>${esc(r.reason)}</td><td>${esc(r.purchase_id ?? "")}</td></tr>`).join("") + "</table>" : "";
-  }catch(e){ $("hist").innerHTML = ""; }
+function items(){ return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); }
+function recalc(){ // display only - the server calculates the real total
+  $("total").textContent = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0).toFixed(2);
 }
 async function findCustomer(clear=true){
-  customer = null; 
-  $("hist").innerHTML = "";
-  if(clear) show("payMsg","");
-  try{ 
-    const c = await api("/api/customer?phone="+encodeURIComponent($("phone").value.trim())); 
-    customer = c;
-    loadHistory(c.customer_id);
-    show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} <br>Loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); 
-  } catch(e){ 
-    show("custMsg", esc(e.message), true); 
-  }
+  customer = null; if(clear) show("payMsg","");
+  try{ const c = await api("/api/customer?phone="+encodeURIComponent($("phone").value.trim())); customer = c;
+    show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} - loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); }
+  catch(e){ show("custMsg", esc(e.message), true); }
 }
-
 async function pay(result){
   if(!customer) return show("payMsg","Find the customer first",true);
   if(!items().length) return show("payMsg","Add at least one product",true);
   try{
-    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result,points_to_use:parseInt($("usePts").value||"0",10)||0})});
-    show("payMsg", `Saved. Receipt: <b>${esc(r.payment_ref)}</b><br>Total <b>$${r.total.toFixed(2)}</b> | Points earned: <b>${r.points_earned}</b> | New balance: <b>${r.loyalty_points}</b>`);
-    // ${esc(r.payment_ref)} - total 
-    // <b>$${r.total.toFixed(2)}</b> - points used 
-    // <b>${r.points_used}</b> - paid in money 
-    // <b>$${r.amount_to_pay.toFixed(2)}</b> - points earned 
-    // <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>
-    products = await api("/api/products"); 
-    drawProducts(); 
-    findCustomer(false);
-    $("usePts").value = 0;
-  } catch(e){ 
-    show("payMsg", esc(e.message), true); 
-    products = await api("/api/products"); 
-    drawProducts(); 
-  }
+    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result})});
+    show("payMsg", `Saved. Receipt ${esc(r.payment_ref)} - total <b>${r.total.toFixed(2)}</b> - points earned <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>`);
+    products = await api("/api/products"); drawProducts(); findCustomer(false);
+  }catch(e){ show("payMsg", esc(e.message), true); products = await api("/api/products"); drawProducts(); }
 }
-
-function table(rows){ 
-  if(!rows.length) return "<div class='msg'>No rows</div>";
-  const k = Object.keys(rows[0]); 
-  return "<table><tr>"+k.map(x=>`<th>${esc(x)}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+k.map(x=>`<td>${esc(r[x])}</td>`).join("")+"</tr>").join("")+"</table>"; 
+function table(rows){ if(!rows.length) return "<div class='msg'>No rows</div>";
+  const k = Object.keys(rows[0]); return "<table><tr>"+k.map(x=>`<th>${esc(x)}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+k.map(x=>`<td>${esc(r[x])}</td>`).join("")+"</tr>").join("")+"</table>"; }
+async function top3(){ try{ $("repOut").innerHTML = table(await api("/api/report/top?month="+encodeURIComponent($("month").value))); }catch(e){ show("repOut", esc(e.message), true); } }
+async function check(){ try{ const r = await api("/api/report/check"); $("repOut").innerHTML = r.mismatches.length ? table(r.mismatches) : "<div class='msg'>All totals match the item lines (0 mismatches)</div>"; }catch(e){ show("repOut", esc(e.message), true); } }
+function toggleReg(on){ $("regBox").classList.toggle("hidden", !on); $("loginBox").classList.toggle("hidden", on); show("regMsg",""); }
+async function register(){ // the server checks everything again; these checks only give a faster answer
+  if($("rp").value !== $("rp2").value) return show("regMsg","Passwords do not match",true);
+  try{
+    const r = await api("/api/register",{method:"POST",body:JSON.stringify({full_name:$("rn").value,username:$("ru").value,password:$("rp").value})});
+    const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:r.username,password:$("rp").value})});
+    $("regBox").classList.add("hidden"); start(u);
+  }catch(e){ show("regMsg", esc(e.message), true); }
 }
-
-async function top3(){ 
-  try{ 
-    $("repOut").innerHTML = table(await api("/api/report/top?month="+encodeURIComponent($("month").value))); 
-  } catch(e){ 
-    show("repOut", esc(e.message), true); 
-  } 
+async function changePw(){
+  if($("np").value !== $("np2").value) return show("pwMsg","New passwords do not match",true);
+  try{ await api("/api/password",{method:"POST",body:JSON.stringify({current_password:$("cp").value,new_password:$("np").value})});
+    show("pwMsg","Password changed"); $("cp").value=$("np").value=$("np2").value=""; }
+  catch(e){ show("pwMsg", esc(e.message), true); }
 }
-
-async function check(){ 
-  try{ 
-    const r = await api("/api/report/check"); 
-    $("repOut").innerHTML = r.mismatches.length ? table(r.mismatches) : "<div class='msg'>All totals match the item lines (0 mismatches)</div>"; 
-  } catch(e){ 
-    show("repOut", esc(e.message), true); 
-  } 
+async function addUser(){
+  try{ const r = await api("/api/users",{method:"POST",body:JSON.stringify({full_name:$("an").value,username:$("au").value,password:$("ap").value,role:$("ar").value})});
+    show("usrMsg",`User <b>${esc(r.username)}</b> (${esc(r.role)}) created`); $("an").value=$("au").value=$("ap").value=""; listUsers(); }
+  catch(e){ show("usrMsg", esc(e.message), true); }
 }
-
+async function listUsers(){ try{ $("usrOut").innerHTML = table(await api("/api/users")); }catch(e){ show("usrMsg", esc(e.message), true); } }
 api("/api/me").then(start).catch(()=>{});
-</script>
-</body>
-</html>
+</script></body></html>
