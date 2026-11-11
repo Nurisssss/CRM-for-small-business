@@ -75,6 +75,7 @@
       <input id="phone" size="22" placeholder="+7 700 000 01 01"> 
       <button onclick="findCustomer()">Search by Phone</button>
       <div id="custMsg"></div>
+      <div id="hist"></div>
     </div>
 
     <div class="box">
@@ -83,7 +84,7 @@
         <thead>
           <tr>
             <th>Product</th>
-            <th>Price</th>
+            <th>Price ($)</th>
             <th>In stock</th>
             <th>Quantity</th>
           </tr>
@@ -91,7 +92,9 @@
         <tbody id="prod"></tbody>
       </table>
       <div class="total-row">
-        <b>Total Amount: $<span id="total">0.00</span></b>
+        <p><b>Total: $<span id="total">0.00</span></b></p>
+        <p>Use bonus points: <input id="usePts" type="number" min="0" value="0" style="width:100px" oninput="recalc()"> <small id="ptsHint">(find the customer first)</small></p>
+        <p><b>To pay in money: $<span id="toPay">0.00</span></b></p>
       </div>
     </div>
 
@@ -113,7 +116,7 @@
 </div>
 
 <script>
-let customer = null, products = [];
+let customer = null, products = [], rules = null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -143,6 +146,7 @@ async function start(u){
   $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
   $("mgr").classList.toggle("hidden", u.role !== "Manager");
   products = await api("/api/products"); 
+  rules = await api("/api/rules"); 
   drawProducts();
 }
 
@@ -166,16 +170,30 @@ function items(){
   return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); 
 }
 
-function recalc(){ 
-  $("total").textContent = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0).toFixed(2);
+function recalc(){ // display only - the server calculates the real total, the real limit and the real points
+  const total = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0);
+  $("total").textContent = total.toFixed(2);
+  const value = rules ? parseFloat(rules.point_value) : 1, share = rules ? parseFloat(rules.max_redeem_share) : 0;
+  const maxByShare = Math.floor(Math.round(total*100)*share/Math.round(value*100) + 1e-6);   // whole cents, same as the server
+  const maxUse = customer ? Math.max(0, Math.min(customer.loyalty_points, maxByShare)) : 0;
+  $("ptsHint").textContent = customer ? `(max ${maxUse} points now: balance ${customer.loyalty_points} = $${(customer.loyalty_points*value).toFixed(2)}, limit ${Math.round(share*100)}% of the bill; 100 points = $1)` : "(find the customer first)";
+  const use = Math.max(0, parseInt($("usePts").value || "0", 10) || 0);
+  $("toPay").textContent = Math.max(0, total - use*value).toFixed(2);
 }
-
+async function loadHistory(id){   // points history: every earn (+) and every spend (-) of this customer
+  try{ const rows = await api("/api/points-log?customer_id="+id);
+    $("hist").innerHTML = rows.length ? "<p><small>Points history (newest first)</small></p><table><tr><th>When</th><th>Change</th><th>Reason</th><th>Purchase</th></tr>"
+      + rows.map(r=>`<tr><td>${esc(r.created_at)}</td><td>${r.points_change>0?"+":""}${r.points_change}</td><td>${esc(r.reason)}</td><td>${esc(r.purchase_id ?? "")}</td></tr>`).join("") + "</table>" : "";
+  }catch(e){ $("hist").innerHTML = ""; }
+}
 async function findCustomer(clear=true){
   customer = null; 
+  $("hist").innerHTML = "";
   if(clear) show("payMsg","");
   try{ 
     const c = await api("/api/customer?phone="+encodeURIComponent($("phone").value.trim())); 
     customer = c;
+    loadHistory(c.customer_id);
     show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} <br>Loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); 
   } catch(e){ 
     show("custMsg", esc(e.message), true); 
@@ -186,11 +204,17 @@ async function pay(result){
   if(!customer) return show("payMsg","Find the customer first",true);
   if(!items().length) return show("payMsg","Add at least one product",true);
   try{
-    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result})});
+    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result,points_to_use:parseInt($("usePts").value||"0",10)||0})});
     show("payMsg", `Saved. Receipt: <b>${esc(r.payment_ref)}</b><br>Total <b>$${r.total.toFixed(2)}</b> | Points earned: <b>${r.points_earned}</b> | New balance: <b>${r.loyalty_points}</b>`);
+    // ${esc(r.payment_ref)} - total 
+    // <b>$${r.total.toFixed(2)}</b> - points used 
+    // <b>${r.points_used}</b> - paid in money 
+    // <b>$${r.amount_to_pay.toFixed(2)}</b> - points earned 
+    // <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>
     products = await api("/api/products"); 
     drawProducts(); 
     findCustomer(false);
+    $("usePts").value = 0;
   } catch(e){ 
     show("payMsg", esc(e.message), true); 
     products = await api("/api/products"); 
