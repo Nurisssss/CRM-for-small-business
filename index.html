@@ -1,70 +1,66 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CRM for Small Business - prototype</title>
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#222;line-height:1.4}
-  h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:0 0 10px}
-  .box{border:1px solid #333;border-radius:6px;padding:16px;margin:14px 0}
-  input,button{font-size:16px;padding:7px 10px;margin:3px 0} input{border:1px solid #333;border-radius:4px}
-  button{border:1px solid #222;background:#fff;border-radius:4px;cursor:pointer} button:hover{background:#eee}
-  table{border-collapse:collapse;width:100%} th,td{border:1px solid #333;padding:6px 8px;text-align:left}
-  .msg{padding:8px 10px;border:1px solid #333;border-radius:4px;margin-top:8px} .err{border-style:dashed;font-weight:bold}
-  .top{display:flex;justify-content:space-between;align-items:center} .hidden{display:none} small{color:#555}
-</style></head><body>
-<h1>CRM for Small Business</h1><small>Prototype - record a purchase for a loyalty customer</small>
+<title>CRM for Small Business</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header>
+  <h1>CRM for Small Business</h1>
+  <small>Record a purchase for a loyalty customer</small>
+</header>
 
 <div id="loginBox" class="box">
   <h2>Log in</h2>
-  <input id="u" placeholder="username" autocomplete="username"> <input id="p" type="password" placeholder="password" autocomplete="current-password">
+  <input id="u" placeholder="Username" autocomplete="username"> <input id="p" type="password" placeholder="Password" autocomplete="current-password">
   <button onclick="login()">Log in</button>
   <div id="loginMsg"></div>
   <p><small>No account? <a href="#" onclick="toggleReg(true);return false">Register</a></small></p>
 </div>
 
 <div id="regBox" class="box hidden">
-  <h2>Register a new account</h2>
-  <input id="rn" placeholder="full name" autocomplete="name"> <input id="ru" placeholder="username (a-z, 0-9, _)" autocomplete="username"><br>
-  <input id="rp" type="password" placeholder="password (8+, letter and digit)" autocomplete="new-password" size="30">
-  <input id="rp2" type="password" placeholder="repeat password" autocomplete="new-password">
+  <h2>Create an account</h2>
+  <input id="rn" placeholder="Full name" autocomplete="name"> <input id="ru" placeholder="Username (a-z, 0-9, _)" autocomplete="username"><br>
+  <input id="rp" type="password" placeholder="Password (8+, letter and digit)" autocomplete="new-password" size="30">
+  <input id="rp2" type="password" placeholder="Repeat password" autocomplete="new-password">
   <button onclick="register()">Create account</button>
   <div id="regMsg"></div>
   <p><small>New accounts get the Employee role. <a href="#" onclick="toggleReg(false);return false">Back to log in</a></small></p>
 </div>
 
 <div id="app" class="hidden">
-  <div class="box top"><div id="who"></div><div><button onclick="$('pwBox').classList.toggle('hidden')">Change password</button> <button onclick="logout()">Log out</button></div></div>
+  <div class="box top"><div id="who"></div><div><button class="secondary" onclick="$('pwBox').classList.toggle('hidden')">Change password</button> <button class="secondary" onclick="logout()">Log out</button></div></div>
 
   <div id="pwBox" class="box hidden"><h2>Change my password</h2>
-    <input id="cp" type="password" placeholder="current password" autocomplete="current-password">
-    <input id="np" type="password" placeholder="new password" autocomplete="new-password">
-    <input id="np2" type="password" placeholder="repeat new password" autocomplete="new-password">
+    <input id="cp" type="password" placeholder="Current password" autocomplete="current-password">
+    <input id="np" type="password" placeholder="New password" autocomplete="new-password">
+    <input id="np2" type="password" placeholder="Repeat new password" autocomplete="new-password">
     <button onclick="changePw()">Save password</button><div id="pwMsg"></div>
   </div>
 
-  <div class="box"><h2>1. Find the customer</h2>
+  <div class="box"><h2><span class="step">1</span> Find the customer</h2>
     <input id="phone" size="22" placeholder="+7 700 000 01 01"> <button onclick="findCustomer()">Find by phone</button>
     <div id="custMsg"></div>
   </div>
 
-  <div class="box"><h2>2. Add products</h2>
-    <table><thead><tr><th>Product</th><th>Price</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table>
-    <p><b>Total: <span id="total">0.00</span></b></p>
+  <div class="box"><h2><span class="step">2</span> Add products</h2>
+    <div class="table-wrap"><table><thead><tr><th>Product</th><th>Price</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table></div>
+    <p class="total">Total <span id="total">0.00</span></p>
   </div>
 
-  <div class="box"><h2>3. Card terminal (simulated) and save</h2>
-    <button onclick="pay('approved')">Payment approved</button> <button onclick="pay('declined')">Payment declined</button>
+  <div class="box"><h2><span class="step">3</span> Take payment</h2>
+    <small>Card terminal (simulated)</small><br>
+    <button onclick="pay('approved')">Payment approved</button> <button class="danger" onclick="pay('declined')">Payment declined</button>
     <div id="payMsg"></div>
   </div>
 
   <div id="mgr" class="box hidden"><h2>Manager reports</h2>
     <input id="month" size="8" value="2026-10"> <button onclick="top3()">Top customers of the month</button>
-    <button onclick="check()">Check totals</button><div id="repOut"></div>
+    <button class="secondary" onclick="check()">Check totals</button><div id="repOut"></div>
   </div>
 
   <div id="usr" class="box hidden"><h2>Manager: users</h2>
-    <input id="an" placeholder="full name"> <input id="au" placeholder="username"> <input id="ap" type="password" placeholder="password" autocomplete="new-password">
-    <select id="ar" style="font-size:16px;padding:7px"><option>Employee</option><option>Manager</option></select>
-    <button onclick="addUser()">Add user</button> <button onclick="listUsers()">Show all users</button>
+    <input id="an" placeholder="Full name"> <input id="au" placeholder="Username"> <input id="ap" type="password" placeholder="Password" autocomplete="new-password">
+    <select id="ar"><option>Employee</option><option>Manager</option></select>
+    <button onclick="addUser()">Add user</button> <button class="secondary" onclick="listUsers()">Show all users</button>
     <div id="usrMsg"></div><div id="usrOut"></div>
   </div>
 </div>
@@ -93,7 +89,7 @@ async function start(u){
 async function logout(){ await api("/api/logout",{method:"POST",body:"{}"}); location.reload(); }
 function drawProducts(){
   $("prod").innerHTML = products.map(p => `<tr><td>${esc(p.product_name)}</td><td>${p.price.toFixed(2)}</td><td>${p.stock_qty}</td>
-    <td><input type="number" min="0" max="100" value="0" style="width:70px" data-id="${p.product_id}" oninput="recalc()"></td></tr>`).join("");
+    <td><input type="number" min="0" max="100" value="0" data-id="${p.product_id}" oninput="recalc()"></td></tr>`).join("");
   recalc();
 }
 function items(){ return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); }
@@ -116,7 +112,7 @@ async function pay(result){
   }catch(e){ show("payMsg", esc(e.message), true); products = await api("/api/products"); drawProducts(); }
 }
 function table(rows){ if(!rows.length) return "<div class='msg'>No rows</div>";
-  const k = Object.keys(rows[0]); return "<table><tr>"+k.map(x=>`<th>${esc(x)}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+k.map(x=>`<td>${esc(r[x])}</td>`).join("")+"</tr>").join("")+"</table>"; }
+  const k = Object.keys(rows[0]); return "<div class='table-wrap'><table><tr>"+k.map(x=>`<th>${esc(x)}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+k.map(x=>`<td>${esc(r[x])}</td>`).join("")+"</tr>").join("")+"</table></div>"; }
 async function top3(){ try{ $("repOut").innerHTML = table(await api("/api/report/top?month="+encodeURIComponent($("month").value))); }catch(e){ show("repOut", esc(e.message), true); } }
 async function check(){ try{ const r = await api("/api/report/check"); $("repOut").innerHTML = r.mismatches.length ? table(r.mismatches) : "<div class='msg'>All totals match the item lines (0 mismatches)</div>"; }catch(e){ show("repOut", esc(e.message), true); } }
 function toggleReg(on){ $("regBox").classList.toggle("hidden", !on); $("loginBox").classList.toggle("hidden", on); show("regMsg",""); }

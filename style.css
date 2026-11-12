@@ -1,149 +1,114 @@
 :root {
-  --primary-color: #2563eb;
-  --primary-hover: #1d4ed8;
-  --bg-color: #f3f4f6;
-  --card-bg: #ffffff;
-  --text-main: #1f2937;
-  --text-muted: #6b7280;
-  --border-color: #e5e7eb;
-  --error-bg: #fef2f2;
-  --error-border: #ef4444;
-  --error-text: #b91c1c;
-  --success-bg: #f0fdf4;
-  --success-border: #22c55e;
-  --success-text: #15803d;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1c2430;
+  --muted: #667085;
+  --line: #e4e7ec;
+  --accent: #0f766e;
+  --accent-hover: #115e59;
+  --accent-soft: #e6f4f2;
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --danger-line: #f4b4ae;
+  --ok-soft: #ecfdf3;
+  --ok-line: #a6e1bd;
+  --ok-text: #05603a;
+  --radius: 10px;
 }
 
+*, *::before, *::after { box-sizing: border-box; }
+
 body {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-main);
-  max-width: 900px;
-  margin: 40px auto;
-  padding: 0 20px;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
   line-height: 1.5;
 }
 
-header {
-  margin-bottom: 24px;
-}
+header { margin-bottom: 20px; }
+h1 { font-size: 26px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 17px; font-weight: 600; margin: 0 0 14px; display: flex; align-items: center; gap: 10px; }
+small { color: var(--muted); font-size: 14px; }
+a { color: var(--accent); }
 
-h1 {
-  font-size: 28px;
-  margin: 0 0 8px 0;
-  color: #111827;
-}
+.hidden { display: none !important; }
 
-h2 {
-  font-size: 18px;
-  margin: 0 0 16px 0;
-  font-weight: 600;
-  color: #374151;
-  border-bottom: 2px solid var(--border-color);
-  padding-bottom: 8px;
-}
-
-small {
-  color: var(--text-muted);
-  font-size: 14px;
-}
-
+/* Cards */
 .box {
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 24px;
-  margin: 20px 0;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin: 16px 0;
+}
+.top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 20px; }
+
+/* Step badge */
+.step {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 14px; font-weight: 700;
 }
 
-.top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
+/* Form controls */
+input, select {
+  font: inherit; font-size: 15px;
+  padding: 9px 12px; margin: 4px 6px 4px 0;
+  border: 1px solid #d0d5dd; border-radius: 8px;
+  background: #fff; color: var(--text);
+  max-width: 100%;
 }
-
-input[type="text"],
-input[type="password"],
-input[type="number"] {
-  font-size: 15px;
-  padding: 10px 12px;
-  margin: 4px 8px 4px 0;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  outline: none;
-  transition: border-color 0.2s;
+input::placeholder { color: #98a2b3; }
+input:focus-visible, select:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
-
-input:focus {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
+td input[type="number"] { width: 76px; margin: 0; }
 
 button {
-  font-size: 15px;
-  font-weight: 500;
-  padding: 10px 16px;
-  margin: 4px 4px 4px 0;
-  border: none;
-  background-color: var(--primary-color);
-  color: white;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.2s;
+  font: inherit; font-size: 15px; font-weight: 500;
+  padding: 9px 16px; margin: 4px 6px 4px 0;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  border-radius: 8px; cursor: pointer;
+  transition: background-color .15s;
 }
+button:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.secondary { background: #fff; color: var(--text); border-color: #d0d5dd; }
+button.secondary:hover { background: #f2f4f7; border-color: #d0d5dd; }
+button.danger { background: #fff; color: var(--danger); border-color: var(--danger-line); }
+button.danger:hover { background: var(--danger-soft); border-color: var(--danger-line); }
 
-button:hover {
-  background-color: var(--primary-hover);
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+th { font-size: 13px; font-weight: 600; color: var(--muted); background: #fafbfc; }
+tbody tr:hover { background: #fafbfc; }
+
+/* Total line */
+.total {
+  display: flex; justify-content: flex-end; align-items: baseline; gap: 8px;
+  margin: 14px 0 0; font-size: 18px;
 }
+.total span { font-size: 24px; font-weight: 700; color: var(--accent); }
 
-button.secondary {
-  background-color: white;
-  color: var(--text-main);
-  border: 1px solid #d1d5db;
-}
-
-button.secondary:hover {
-  background-color: #f9fafb;
-}
-
-button.danger {
-  background-color: white;
-  color: var(--error-text);
-  border: 1px solid var(--error-border);
-}
-
-button.danger:hover {
-  background-color: var(--error-bg);
-}
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-  margin-bottom: 16px;
-}
-
-th, td {
-  border-bottom: 1px solid var(--border-color);
-  padding: 12px 16px;
-  text-align: left;
-}
-
-th {
-  background-color: #f9fafb;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-tr:hover {
-  background-color: #f9fafb;
-}
-
+/* Messages */
 .msg {
-  padding: 12px 16px;
-  background-color: var(--success-bg);
-  border: 1px solid var(--success-border);
-  color: var(--success-text);
-  border-radius: 6px;
-  margin-top:
+  padding: 10px 14px; margin-top: 10px;
+  background: var(--ok-soft); border: 1px solid var(--ok-line); color: var(--ok-text);
+  border-radius: 8px; overflow-x: auto;
+}
+.msg.err { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); font-weight: 500; }
+.msg .table-wrap, .msg table { color: var(--text); }
+#repOut .msg, #usrOut .msg { background: #f2f4f7; border-color: var(--line); color: var(--muted); }
+#repOut, #usrOut { margin-top: 12px; }
+
+@media (max-width: 600px) {
+  body { padding: 20px 12px 48px; }
+  .box { padding: 16px; }
+  input:not([type="number"]) { width: 100%; margin-right: 0; }
+  th, td { padding: 8px; }
+}

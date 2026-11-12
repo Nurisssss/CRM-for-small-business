@@ -255,6 +255,12 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and u.path in ("/", "/index.html"):
                 with open(os.path.join(BASE, "index.html"), "rb") as f: page = f.read()
                 return self._send(200, page, ctype="text/html; charset=utf-8")
+            if method == "GET" and u.path in ("/", "/index.html"):
+                with open(os.path.join(BASE, "index.html"), "rb") as f: page = f.read()
+                return self._send(200, page, ctype="text/html; charset=utf-8")
+            if method == "GET" and u.path == "/style.css":          # <-- add this
+                with open(os.path.join(BASE, "style.css"), "rb") as f: css = f.read()
+                return self._send(200, css, ctype="text/css; charset=utf-8")
             if method == "POST" and u.path == "/api/login":
                 sid, s = login(self._body())
                 return self._send(200, {"username": s["username"], "role": s["role"], "name": s["name"]},
