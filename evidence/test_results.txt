@@ -13,8 +13,21 @@ test_12_negative_quantity_refused (__main__.CrmTests.test_12_negative_quantity_r
 test_13_employee_cannot_open_reports (__main__.CrmTests.test_13_employee_cannot_open_reports) ... ok
 test_14_manager_top_customer_report (__main__.CrmTests.test_14_manager_top_customer_report) ... ok
 test_15_totals_check_has_no_mismatch (__main__.CrmTests.test_15_totals_check_has_no_mismatch) ... ok
+test_16_customer_notes_add (__main__.CrmTests.test_16_customer_notes_add) ... ok
+test_17_customer_notes_refused_for_unknown (__main__.CrmTests.test_17_customer_notes_refused_for_unknown) ... ok
+test_18_merge_customers (__main__.CrmTests.test_18_merge_customers) ... ok
+test_19_customer_registration_success (__main__.CrmTests.test_19_customer_registration_success) ... ok
+test_20_customer_registration_duplicate_phone (__main__.CrmTests.test_20_customer_registration_duplicate_phone) ... ok
+test_21_loyalty_points_calculation (__main__.CrmTests.test_21_loyalty_points_calculation) ... ok
+test_22_manager_checks_sql_query (__main__.CrmTests.test_22_manager_checks_sql_query) ... ok
+test_23_employee_unauthorized_action (__main__.CrmTests.test_23_employee_unauthorized_action)
+Test 23: an employee cannot merge customers ... ok
+test_24_rules_endpoint (__main__.CrmTests.test_24_rules_endpoint)
+Test 24: points rules ... ok
+test_25_points_history (__main__.CrmTests.test_25_points_history)
+Test 25: points history ... ok
 
 ----------------------------------------------------------------------
-Ran 15 tests in 1.756s
+Ran 25 tests in 1.792s
 
 OK

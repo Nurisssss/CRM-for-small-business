@@ -1,5 +1,5 @@
 """Automated tests for the CRM prototype.
-Each test prints PASS or FAIL, so the result can be pasted into the team's test table."""
+Each line shows ok or FAIL, so the result can be pasted into the team's test table."""
 import json, os, tempfile, threading, unittest, urllib.request, urllib.error
 import app
 from decimal import Decimal
@@ -25,9 +25,8 @@ class CrmTests(unittest.TestCase):
     def tearDownClass(cls): cls.srv.shutdown()
     def setUp(self):
         self.emp, self.mgr = Api(self.base), Api(self.base)
-        # Явно логинимся под реальными учетками из data.sql
-        self.emp.login("aknur", "hash1")
-        self.mgr.login("daniyar", "hash2")
+        self.emp.login("aruzhan", "cashier123")
+        self.mgr.login("daniyar", "manager123")
     def state(self):
         db = app.connect(); r = (db.execute("SELECT COUNT(*) FROM Purchase").fetchone()[0], db.execute("SELECT stock_qty FROM Product WHERE product_id=1").fetchone()[0],
                                  db.execute("SELECT loyalty_points FROM Customer WHERE customer_id=1").fetchone()[0]); db.close(); return r
@@ -63,44 +62,46 @@ class CrmTests(unittest.TestCase):
         self.emp.call("POST", "/api/purchase", {"customer_id": 2, "items": [{"product_id": 2, "quantity": 3}], "payment": "approved"})
         s, j = self.mgr.call("GET", "/api/report/check"); self.assertEqual((s, j["mismatches"]), (200, []))
 
-    # добавила еще 10 тестов 
     def test_16_customer_notes_add(self):
         s, _ = self.emp.call("POST", "/api/customer/notes", {"customer_id": 1, "note": "VIP"})
         self.assertEqual(s, 201)
+        s, j = self.emp.call("GET", "/api/customer/notes?customer_id=1")
+        self.assertEqual((s, j[0]["note_text"]), (200, "VIP"))
     def test_17_customer_notes_refused_for_unknown(self):
-        s, _ = self.emp.call("POST", "/api/customer/notes", {"customer_id": 77, "note": "Test"})
-        self.assertEqual(s, 404)
+        s, j = self.emp.call("POST", "/api/customer/notes", {"customer_id": 77, "note": "Test"})
+        self.assertEqual((s, j["error"]), (404, "Customer not found"))
     def test_18_merge_customers(self):
-        s, _ = self.mgr.call("POST", "/api/admin/merge-customers", {"source_id": 5, "target_id": 4})
+        s, j = self.mgr.call("POST", "/api/admin/merge-customers", {"source_id": 5, "target_id": 4})
         self.assertEqual(s, 200)
+        self.assertEqual((j["customer"]["customer_id"], j["customer"]["phone"], j["customer"]["loyalty_points"]), (4, "+7 701 555 04 04", 24))
+        self.assertEqual(self.emp.call("GET", "/api/customer?phone=%2B7%20700%20000%2001%2004")[0], 404)
     def test_19_customer_registration_success(self):
-        s, _ = self.emp.call("POST", "/api/customer/register", {"name": "Ivan", "phone": "+77029998877"})
-        self.assertEqual(s, 201)
+        s, j = self.emp.call("POST", "/api/customer/register", {"name": "Ivan", "phone": "+77029998877"})
+        self.assertEqual((s, j["phone"]), (201, "+7 702 999 88 77"))
     def test_20_customer_registration_duplicate_phone(self):
         self.emp.call("POST", "/api/customer/register", {"name": "Petr", "phone": "+77025554433"})
-        s, _ = self.emp.call("POST", "/api/customer/register", {"name": "Other", "phone": "+77025554433"})
-        self.assertEqual(s, 400)
+        s, _ = self.emp.call("POST", "/api/customer/register", {"name": "Other", "phone": "8 702 555 44 33"})
+        self.assertEqual(s, 409)
     def test_21_loyalty_points_calculation(self):
-        s, _ = self.emp.call("POST", "/api/purchase", {"customer_id": 2, "items": [{"product_id": 1, "quantity": 1}], "payment": "approved"})
+        s, j = self.emp.call("POST", "/api/purchase", {"customer_id": 1, "items": [{"product_id": 1, "quantity": 1}], "payment": "approved", "points_to_use": 100})
         self.assertEqual(s, 201)
+        self.assertEqual((j["points_used"], j["amount_to_pay"], j["points_earned"]), (100, 17.0, 51))
     def test_22_manager_checks_sql_query(self):
-        s, _ = self.mgr.call("GET", "/api/report/checks")
-        self.assertEqual(s, 200)
+        s, j = self.mgr.call("GET", "/api/report/checks")
+        self.assertEqual((s, j["totals_mismatches"], j["points_mismatches"]), (200, [], []))
     def test_23_employee_unauthorized_action(self):
-        """Тест 23: Обычный сотрудник не может выполнять административные действия"""
-        self.emp.login("aruzhan", "cashier123")   
+        """Test 23: an employee cannot merge customers"""
         s, _ = self.emp.call("POST", "/api/admin/merge-customers", {"source_id": 1, "target_id": 2})
         self.assertEqual(s, 403)
+        self.assertEqual(self.emp.call("GET", "/api/customer?phone=%2B7%20700%20000%2001%2001")[0], 200)
     def test_24_rules_endpoint(self):
-        """Тест 24: Проверка эндпоинта правил"""
-        self.emp.login("aruzhan", "cashier123")  
-        s, _ = self.emp.call("GET", "/api/rules")
-        self.assertEqual(s, 200)
+        """Test 24: points rules"""
+        s, j = self.emp.call("GET", "/api/rules")
+        self.assertEqual((s, j["points_rate"], j["max_redeem_share"]), (200, "0.03", "0.30"))
     def test_25_points_history(self):
-        """Тест 25: Проверка истории баллов клиента"""
-        self.emp.login("aruzhan", "cashier123")  
-        s, _ = self.emp.call("GET", "/api/points-log?customer_id=1")
-        self.assertEqual(s, 200)
+        """Test 25: points history"""
+        s, j = self.emp.call("GET", "/api/points-log?customer_id=1")
+        self.assertEqual(s, 200); self.assertIn("opening", [r["reason"] for r in j])
         
 if __name__ == "__main__":
-    unittest.main(verbosity=2) 
+    unittest.main(verbosity=2)
