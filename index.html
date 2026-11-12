@@ -39,11 +39,14 @@
   <div class="box"><h2><span class="step">1</span> Find the customer</h2>
     <input id="phone" size="22" placeholder="+7 700 000 01 01"> <button onclick="findCustomer()">Find by phone</button>
     <div id="custMsg"></div>
+    <div id="hist"></div>
   </div>
 
   <div class="box"><h2><span class="step">2</span> Add products</h2>
-    <div class="table-wrap"><table><thead><tr><th>Product</th><th>Price</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table></div>
-    <p class="total">Total <span id="total">0.00</span></p>
+    <div class="table-wrap"><table><thead><tr><th>Product</th><th>Price ($)</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table></div>
+    <p class="total">Total $<span id="total">0.00</span></p>
+    <p style="margin:10px 0 0">Use bonus points <input id="usePts" type="number" min="0" value="0" oninput="recalc()" style="width:110px"> <small id="ptsHint">(find the customer first)</small></p>
+    <p class="total">To pay in money $<span id="toPay">0.00</span></p>
   </div>
 
   <div class="box"><h2><span class="step">3</span> Take payment</h2>
@@ -66,7 +69,7 @@
 </div>
 
 <script>
-let customer = null, products = [];
+let customer = null, products = [], rules = null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path, opts){
@@ -84,7 +87,9 @@ async function start(u){
   $("loginBox").classList.add("hidden"); $("app").classList.remove("hidden");
   $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
   $("mgr").classList.toggle("hidden", u.role !== "Manager"); $("usr").classList.toggle("hidden", u.role !== "Manager");
-  products = await api("/api/products"); drawProducts();
+  products = await api("/api/products");
+  try { rules = await api("/api/rules"); } catch(e) { rules = null; }   // points rules from the server
+  drawProducts();
 }
 async function logout(){ await api("/api/logout",{method:"POST",body:"{}"}); location.reload(); }
 function drawProducts(){
@@ -93,21 +98,42 @@ function drawProducts(){
   recalc();
 }
 function items(){ return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); }
-function recalc(){ // display only - the server calculates the real total
-  $("total").textContent = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0).toFixed(2);
+function recalc(){ // display only - the server calculates the real total, the real limit and the real points
+  const total = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0);
+  $("total").textContent = total.toFixed(2);
+  if(!rules){ $("ptsHint").textContent = "(points rules not available - update app.py)"; $("toPay").textContent = total.toFixed(2); return; }
+  const value = parseFloat(rules.point_value), share = parseFloat(rules.max_redeem_share);
+  const maxByShare = Math.floor(Math.round(total*100)*share/Math.round(value*100) + 1e-6);   // whole cents, same as the server
+  const maxUse = customer ? Math.max(0, Math.min(customer.loyalty_points, maxByShare)) : 0;
+  $("ptsHint").textContent = customer
+    ? `(max ${maxUse} points now: balance ${customer.loyalty_points} = $${(customer.loyalty_points*value).toFixed(2)}, limit ${Math.round(share*100)}% of the bill; 100 points = $1)`
+    : "(find the customer first)";
+  const use = Math.max(0, parseInt($("usePts").value || "0", 10) || 0);
+  $("toPay").textContent = Math.max(0, total - use*value).toFixed(2);
+}
+async function loadHistory(id){ // points history: every earn (+) and every spend (-) of this customer
+  try{
+    const rows = await api("/api/points-log?customer_id="+id);
+    $("hist").innerHTML = rows.length
+      ? "<p style='margin:14px 0 4px'><small>Points history (newest first)</small></p>"
+        + table(rows.map(r=>({When:r.created_at, Change:(r.points_change>0?"+":"")+r.points_change, Reason:r.reason, Purchase:r.purchase_id ?? ""})))
+      : "";
+  }catch(e){ $("hist").innerHTML = ""; }
 }
 async function findCustomer(clear=true){
-  customer = null; if(clear) show("payMsg","");
+  customer = null; $("hist").innerHTML = ""; if(clear) show("payMsg","");
   try{ const c = await api("/api/customer?phone="+encodeURIComponent($("phone").value.trim())); customer = c;
+    recalc(); loadHistory(c.customer_id);
     show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} - loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); }
-  catch(e){ show("custMsg", esc(e.message), true); }
+  catch(e){ show("custMsg", esc(e.message), true); recalc(); }
 }
 async function pay(result){
   if(!customer) return show("payMsg","Find the customer first",true);
   if(!items().length) return show("payMsg","Add at least one product",true);
   try{
-    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result})});
-    show("payMsg", `Saved. Receipt ${esc(r.payment_ref)} - total <b>${r.total.toFixed(2)}</b> - points earned <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>`);
+    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result,points_to_use:parseInt($("usePts").value||"0",10)||0})});
+    show("payMsg", `Saved. Receipt ${esc(r.payment_ref)} - total <b>$${r.total.toFixed(2)}</b> - points used <b>${r.points_used}</b> - paid in money <b>$${r.amount_to_pay.toFixed(2)}</b> - points earned <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>`);
+    $("usePts").value = 0;
     products = await api("/api/products"); drawProducts(); findCustomer(false);
   }catch(e){ show("payMsg", esc(e.message), true); products = await api("/api/products"); drawProducts(); }
 }
