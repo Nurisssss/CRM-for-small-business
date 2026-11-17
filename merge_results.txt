@@ -1,0 +1,30 @@
+
+--- BEFORE the merge ---
+Customer   (4, 'Madina Omar', '+7 700 000 01 04', 'madina@example.com', 18, '2026-09-28')
+Customer   (5, 'Madina Omar', '+7 701 555 04 04', None, 6, '2026-11-05')
+Purchase   (4, 4, '2026-10-15 17:10', 18)
+Purchase   (6, 4, '2026-09-28 13:00', 18)
+Purchase   (9, 5, '2026-11-05 12:15', 6.5)
+Note       (5, 'Says she changed her phone number; old profile not found at the till.')
+
+--- AFTER the merge (5 merged into 4) ---
+Customer   (4, 'Madina Omar', '+7 701 555 04 04', 'madina@example.com', 24, '2026-11-12')
+Purchase   (4, 4, '2026-10-15 17:10', 18)
+Purchase   (6, 4, '2026-09-28 13:00', 18)
+Purchase   (9, 4, '2026-11-05 12:15', 6.5)
+Note       (4, 'Says she changed her phone number; old profile not found at the till.')
+Note       (4, 'Merged duplicate profile #5 into this one. Phone changed from +7 700 000 01 04 to +7 701 555 04 04. Points added: 6.')
+
+test_01_duplicate_is_deleted (__main__.MergeTests.test_01_duplicate_is_deleted) ... ok
+test_02_kept_profile_gets_the_new_phone (__main__.MergeTests.test_02_kept_profile_gets_the_new_phone) ... ok
+test_03_points_are_added (__main__.MergeTests.test_03_points_are_added) ... ok
+test_04_all_purchases_and_notes_move (__main__.MergeTests.test_04_all_purchases_and_notes_move) ... ok
+test_05_data_checks_still_pass (__main__.MergeTests.test_05_data_checks_still_pass) ... ok
+test_06_merge_into_itself_refused (__main__.MergeTests.test_06_merge_into_itself_refused) ... ok
+test_07_unknown_customer_refused (__main__.MergeTests.test_07_unknown_customer_refused) ... ok
+test_08_employee_cannot_merge (__main__.MergeTests.test_08_employee_cannot_merge) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.130s
+
+OK

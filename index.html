@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRM for Small Business</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header>
+  <h1>CRM for Small Business</h1>
+  <small>Record a purchase for a loyalty customer</small>
+</header>
+
+<div id="loginBox" class="box">
+  <h2>Log in</h2>
+  <input id="u" placeholder="Username" autocomplete="username"> <input id="p" type="password" placeholder="Password" autocomplete="current-password">
+  <button onclick="login()">Log in</button>
+  <div id="loginMsg"></div>
+  <p><small>No account? <a href="#" onclick="toggleReg(true);return false">Register</a></small></p>
+</div>
+
+<div id="regBox" class="box hidden">
+  <h2>Create an account</h2>
+  <input id="rn" placeholder="Full name" autocomplete="name"> <input id="ru" placeholder="Username (a-z, 0-9, _)" autocomplete="username"><br>
+  <input id="rp" type="password" placeholder="Password (8+, letter and digit)" autocomplete="new-password" size="30">
+  <input id="rp2" type="password" placeholder="Repeat password" autocomplete="new-password">
+  <button onclick="register()">Create account</button>
+  <div id="regMsg"></div>
+  <p><small>New accounts get the Employee role. <a href="#" onclick="toggleReg(false);return false">Back to log in</a></small></p>
+</div>
+
+<div id="app" class="hidden">
+  <div class="box top"><div id="who"></div><div><button class="secondary" onclick="$('pwBox').classList.toggle('hidden')">Change password</button> <button class="secondary" onclick="logout()">Log out</button></div></div>
+
+  <div id="pwBox" class="box hidden"><h2>Change my password</h2>
+    <input id="cp" type="password" placeholder="Current password" autocomplete="current-password">
+    <input id="np" type="password" placeholder="New password" autocomplete="new-password">
+    <input id="np2" type="password" placeholder="Repeat new password" autocomplete="new-password">
+    <button onclick="changePw()">Save password</button><div id="pwMsg"></div>
+  </div>
+
+  <div class="box"><h2><span class="step">1</span> Find the customer</h2>
+    <input id="phone" size="22" placeholder="+7 700 000 01 01"> <button onclick="findCustomer()">Find by phone</button>
+    <div id="custMsg"></div>
+    <div id="hist"></div>
+  </div>
+
+  <div class="box"><h2><span class="step">2</span> Add products</h2>
+    <div class="table-wrap"><table><thead><tr><th>Product</th><th>Price ($)</th><th>In stock</th><th>Quantity</th></tr></thead><tbody id="prod"></tbody></table></div>
+    <p class="total">Total $<span id="total">0.00</span></p>
+    <p style="margin:10px 0 0">Use bonus points <input id="usePts" type="number" min="0" value="0" oninput="recalc()" style="width:110px"> <small id="ptsHint">(find the customer first)</small></p>
+    <p class="total">To pay in money $<span id="toPay">0.00</span></p>
+  </div>
+
+  <div class="box"><h2><span class="step">3</span> Take payment</h2>
+    <small>Card terminal (simulated)</small><br>
+    <button onclick="pay('approved')">Payment approved</button> <button class="danger" onclick="pay('declined')">Payment declined</button>
+    <div id="payMsg"></div>
+  </div>
+
+  <div id="mgr" class="box hidden"><h2>Manager reports</h2>
+    <input id="month" size="8" value="2026-10"> <button onclick="top3()">Top customers of the month</button>
+    <button class="secondary" onclick="check()">Check totals</button><div id="repOut"></div>
+  </div>
+
+  <div id="usr" class="box hidden"><h2>Manager: users</h2>
+    <input id="an" placeholder="Full name"> <input id="au" placeholder="Username"> <input id="ap" type="password" placeholder="Password" autocomplete="new-password">
+    <select id="ar"><option>Employee</option><option>Manager</option></select>
+    <button onclick="addUser()">Add user</button> <button class="secondary" onclick="listUsers()">Show all users</button>
+    <div id="usrMsg"></div><div id="usrOut"></div>
+  </div>
+</div>
+
+<script>
+let customer = null, products = [], rules = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts));
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error || "Error "+r.status);
+  return j;
+}
+function show(id, text, isErr){ $(id).innerHTML = text ? `<div class="msg ${isErr?'err':''}">${text}</div>` : ""; }
+async function login(){
+  try{ const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:$("u").value,password:$("p").value})}); start(u); }
+  catch(e){ show("loginMsg", esc(e.message), true); }
+}
+async function start(u){
+  $("loginBox").classList.add("hidden"); $("app").classList.remove("hidden");
+  $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
+  $("mgr").classList.toggle("hidden", u.role !== "Manager"); $("usr").classList.toggle("hidden", u.role !== "Manager");
+  products = await api("/api/products");
+  try { rules = await api("/api/rules"); } catch(e) { rules = null; }   // points rules from the server
+  drawProducts();
+}
+async function logout(){ await api("/api/logout",{method:"POST",body:"{}"}); location.reload(); }
+function drawProducts(){
+  $("prod").innerHTML = products.map(p => `<tr><td>${esc(p.product_name)}</td><td>${p.price.toFixed(2)}</td><td>${p.stock_qty}</td>
+    <td><input type="number" min="0" max="100" value="0" data-id="${p.product_id}" oninput="recalc()"></td></tr>`).join("");
+  recalc();
+}
+function items(){ return [...document.querySelectorAll("#prod input")].map(i=>({product_id:+i.dataset.id, quantity:+i.value})).filter(x=>x.quantity>0); }
+function recalc(){ // display only - the server calculates the real total, the real limit and the real points
+  const total = items().reduce((s,x)=>s+x.quantity*products.find(p=>p.product_id===x.product_id).price,0);
+  $("total").textContent = total.toFixed(2);
+  if(!rules){ $("ptsHint").textContent = "(points rules not available - update app.py)"; $("toPay").textContent = total.toFixed(2); return; }
+  const value = parseFloat(rules.point_value), share = parseFloat(rules.max_redeem_share);
+  const maxByShare = Math.floor(Math.round(total*100)*share/Math.round(value*100) + 1e-6);   // whole cents, same as the server
+  const maxUse = customer ? Math.max(0, Math.min(customer.loyalty_points, maxByShare)) : 0;
+  $("ptsHint").textContent = customer
+    ? `(max ${maxUse} points now: balance ${customer.loyalty_points} = $${(customer.loyalty_points*value).toFixed(2)}, limit ${Math.round(share*100)}% of the bill; 100 points = $1)`
+    : "(find the customer first)";
+  const use = Math.max(0, parseInt($("usePts").value || "0", 10) || 0);
+  $("toPay").textContent = Math.max(0, total - use*value).toFixed(2);
+}
+async function loadHistory(id){ // points history: every earn (+) and every spend (-) of this customer
+  try{
+    const rows = await api("/api/points-log?customer_id="+id);
+    $("hist").innerHTML = rows.length
+      ? "<p style='margin:14px 0 4px'><small>Points history (newest first)</small></p>"
+        + table(rows.map(r=>({When:r.created_at, Change:(r.points_change>0?"+":"")+r.points_change, Reason:r.reason, Purchase:r.purchase_id ?? ""})))
+      : "";
+  }catch(e){ $("hist").innerHTML = ""; }
+}
+async function findCustomer(clear=true){
+  customer = null; $("hist").innerHTML = ""; if(clear) show("payMsg","");
+  try{ const c = await api("/api/customer?phone="+encodeURIComponent($("phone").value.trim())); customer = c;
+    recalc(); loadHistory(c.customer_id);
+    show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} - loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); }
+  catch(e){ show("custMsg", esc(e.message), true); recalc(); }
+}
+async function pay(result){
+  if(!customer) return show("payMsg","Find the customer first",true);
+  if(!items().length) return show("payMsg","Add at least one product",true);
+  try{
+    const r = await api("/api/purchase",{method:"POST",body:JSON.stringify({customer_id:customer.customer_id,items:items(),payment:result,points_to_use:parseInt($("usePts").value||"0",10)||0})});
+    show("payMsg", `Saved. Receipt ${esc(r.payment_ref)} - total <b>$${r.total.toFixed(2)}</b> - points used <b>${r.points_used}</b> - paid in money <b>$${r.amount_to_pay.toFixed(2)}</b> - points earned <b>${r.points_earned}</b> - new balance <b>${r.loyalty_points}</b>`);
+    $("usePts").value = 0;
+    products = await api("/api/products"); drawProducts(); findCustomer(false);
+  }catch(e){ show("payMsg", esc(e.message), true); products = await api("/api/products"); drawProducts(); }
+}
+function table(rows){ if(!rows.length) return "<div class='msg'>No rows</div>";
+  const k = Object.keys(rows[0]); return "<div class='table-wrap'><table><tr>"+k.map(x=>`<th>${esc(x)}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+k.map(x=>`<td>${esc(r[x])}</td>`).join("")+"</tr>").join("")+"</table></div>"; }
+async function top3(){ try{ $("repOut").innerHTML = table(await api("/api/report/top?month="+encodeURIComponent($("month").value))); }catch(e){ show("repOut", esc(e.message), true); } }
+async function check(){ try{ const r = await api("/api/report/check"); $("repOut").innerHTML = r.mismatches.length ? table(r.mismatches) : "<div class='msg'>All totals match the item lines (0 mismatches)</div>"; }catch(e){ show("repOut", esc(e.message), true); } }
+function toggleReg(on){ $("regBox").classList.toggle("hidden", !on); $("loginBox").classList.toggle("hidden", on); show("regMsg",""); }
+async function register(){ // the server checks everything again; these checks only give a faster answer
+  if($("rp").value !== $("rp2").value) return show("regMsg","Passwords do not match",true);
+  try{
+    const r = await api("/api/register",{method:"POST",body:JSON.stringify({full_name:$("rn").value,username:$("ru").value,password:$("rp").value})});
+    const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:r.username,password:$("rp").value})});
+    $("regBox").classList.add("hidden"); start(u);
+  }catch(e){ show("regMsg", esc(e.message), true); }
+}
+async function changePw(){
+  if($("np").value !== $("np2").value) return show("pwMsg","New passwords do not match",true);
+  try{ await api("/api/password",{method:"POST",body:JSON.stringify({current_password:$("cp").value,new_password:$("np").value})});
+    show("pwMsg","Password changed"); $("cp").value=$("np").value=$("np2").value=""; }
+  catch(e){ show("pwMsg", esc(e.message), true); }
+}
+async function addUser(){
+  try{ const r = await api("/api/users",{method:"POST",body:JSON.stringify({full_name:$("an").value,username:$("au").value,password:$("ap").value,role:$("ar").value})});
+    show("usrMsg",`User <b>${esc(r.username)}</b> (${esc(r.role)}) created`); $("an").value=$("au").value=$("ap").value=""; listUsers(); }
+  catch(e){ show("usrMsg", esc(e.message), true); }
+}
+async function listUsers(){ try{ $("usrOut").innerHTML = table(await api("/api/users")); }catch(e){ show("usrMsg", esc(e.message), true); } }
+api("/api/me").then(start).catch(()=>{});
+</script></body></html>
