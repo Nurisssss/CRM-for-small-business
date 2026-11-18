@@ -1,0 +1,53 @@
+erDiagram
+    Customer ||--o{ Purchase : makes
+    Employee ||--o{ Purchase : records
+    Purchase ||--|{ Purchase_Item : contains
+    Product ||--o{ Purchase_Item : "sold as"
+    Customer ||--o{ Points_Log : has
+    Purchase |o--o{ Points_Log : causes
+
+    Customer {
+        INTEGER customer_id PK
+        VARCHAR full_name
+        VARCHAR phone UK
+        VARCHAR email
+        INTEGER loyalty_points
+        DATE last_updated
+    }
+    Employee {
+        INTEGER employee_id PK
+        VARCHAR full_name
+        VARCHAR role
+        VARCHAR username UK
+        VARCHAR password_hash
+    }
+    Product {
+        INTEGER product_id PK
+        VARCHAR product_name
+        VARCHAR category
+        DECIMAL price
+        INTEGER stock_qty
+    }
+    Purchase {
+        INTEGER purchase_id PK
+        INTEGER customer_id FK
+        INTEGER employee_id FK
+        TIMESTAMP purchase_date
+        DECIMAL total_amount
+        VARCHAR payment_status
+        VARCHAR payment_ref
+    }
+    Purchase_Item {
+        INTEGER purchase_id PK, FK
+        INTEGER product_id PK, FK
+        INTEGER quantity
+        DECIMAL unit_price
+    }
+    Points_Log {
+        INTEGER log_id PK
+        INTEGER customer_id FK
+        INTEGER purchase_id FK "nullable"
+        INTEGER points_change
+        VARCHAR reason
+        TIMESTAMP created_at
+    }

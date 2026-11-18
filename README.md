@@ -19,6 +19,7 @@ Demo customer phones: `+7 700 000 01 01` ... `+7 700 000 01 04` (fictional)
 ## Test it
 `python test_app.py` runs the main tests (successful and unsuccessful cases). Each line shows ok or FAIL.
 `python test_security.py` runs 4 security tests (login lock after 5 wrong attempts, 30-minute session expiry, shop code for registration).
+`python test_points_rule.py` runs 7 tests of the points rule (3 % earn, 30 % spend limit, 5,000 cap, rollback, ledger).
 
 ## Backup and restore (Inkar)
 `python backup_db.py backup` copies `crm.db` to `backups/crm_YYYY-MM-DD_HH-MM-SS.db` (safe while the program is running).
@@ -37,11 +38,11 @@ Demo: register a customer, run `backup`, then `python backup_db.py delete-custom
 | app.py - login, roles, passwords, transaction | security and the "record a purchase" transaction | Nurislam |
 | backup_db.py, test_backup.py | backup, restore, and their 6 tests | Inkar |
 | test_app.py | 15 automated tests | Akbota |
-| acceptance criteria of the main process | what "works" means | Aknur |
+| docs/ERD_6_tables.png, docs/points_rule.md, docs/acceptance_criteria.md, test_points_rule.py | 6-table ERD, points rule, 6-step transaction, 8 acceptance criteria linked to tests | Aknur |
 
 ## What is NOT built yet (honest list)
 - Customer notes (next team milestone)
-- Merging duplicate customers; the points rule is a proposal (1 point per whole currency unit) and must be confirmed
+- Merging duplicate customers (SQL script only, no screen); the points rule (3 %, 1 point = 1 cent, 30 % limit, 5,000 cap) is in `docs/points_rule.md` and must be confirmed by the team
 - HTTPS; running on another computer (deployment guide)
 
 ## AI use (the team must keep this paragraph true)
