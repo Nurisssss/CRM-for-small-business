@@ -358,6 +358,89 @@ def report_check(user):
            GROUP BY p.purchase_id, p.total_amount HAVING ROUND(p.total_amount,2) <> ROUND(SUM(i.quantity*i.unit_price),2)""")]
     db.close(); return {"mismatches": rows}
 
+def report_checks(user):
+    require_manager(user)
+    db = connect()
+    totals_mismatches = [dict(r) for r in db.execute(
+        """SELECT p.purchase_id, p.total_amount, SUM(i.quantity*i.unit_price) AS items_sum
+           FROM Purchase p JOIN Purchase_Item i ON i.purchase_id=p.purchase_id
+           GROUP BY p.purchase_id, p.total_amount HAVING ROUND(p.total_amount,2) <> ROUND(SUM(i.quantity*i.unit_price),2)""")]
+    points_mismatches = [dict(r) for r in db.execute(
+        """SELECT c.customer_id, c.loyalty_points AS balance, COALESCE(SUM(l.points_change), 0) AS ledger_sum
+           FROM Customer c LEFT JOIN Points_Log l ON l.customer_id = c.customer_id
+           GROUP BY c.customer_id, c.loyalty_points
+           HAVING c.loyalty_points <> COALESCE(SUM(l.points_change), 0)""")]
+    db.close()
+    return {"totals_mismatches": totals_mismatches, "points_mismatches": points_mismatches}
+
+def add_customer_note(user, data):
+    try:
+        cid = int(data.get("customer_id"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "customer_id must be a number")
+    note = str(data.get("note") or data.get("note_text") or "").strip()
+    if not (1 <= len(note) <= 255):
+        raise ApiError(400, "Note must be 1-255 characters")
+    db = connect()
+    try:
+        if not db.execute("SELECT 1 FROM Customer WHERE customer_id=?", (cid,)).fetchone():
+            raise ApiError(404, "Customer not found")
+        cur = db.execute("INSERT INTO Customer_Note (customer_id, employee_id, note_text) VALUES (?,?,?)",
+                         (cid, user["employee_id"], note))
+        return {"note_id": cur.lastrowid, "customer_id": cid, "note_text": note}
+    finally:
+        db.close()
+
+def list_customer_notes(customer_id):
+    try:
+        cid = int(customer_id)
+    except (TypeError, ValueError):
+        raise ApiError(400, "customer_id must be a number")
+    db = connect()
+    if not db.execute("SELECT 1 FROM Customer WHERE customer_id=?", (cid,)).fetchone():
+        db.close(); raise ApiError(404, "Customer not found")
+    rows = [dict(r) for r in db.execute(
+        "SELECT note_id, customer_id, employee_id, note_text, created_at FROM Customer_Note WHERE customer_id=? ORDER BY note_id DESC",
+        (cid,))]
+    db.close(); return rows
+
+def merge_customers(user, data):
+    require_manager(user)
+    try:
+        src_id = int(data.get("source_id"))
+        tgt_id = int(data.get("target_id"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "source_id and target_id must be numbers")
+    if src_id == tgt_id:
+        raise ApiError(400, "Cannot merge a customer with themselves")
+    db = connect()
+    try:
+        db.execute("BEGIN")
+        src = db.execute("SELECT * FROM Customer WHERE customer_id=?", (src_id,)).fetchone()
+        tgt = db.execute("SELECT * FROM Customer WHERE customer_id=?", (tgt_id,)).fetchone()
+        if not src or not tgt:
+            raise ApiError(404, "Customer not found")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Move purchases, notes, and points ledger rows to target_id
+        db.execute("UPDATE Purchase SET customer_id=? WHERE customer_id=?", (tgt_id, src_id))
+        db.execute("UPDATE Customer_Note SET customer_id=? WHERE customer_id=?", (tgt_id, src_id))
+        db.execute("UPDATE Points_Log SET customer_id=? WHERE customer_id=?", (tgt_id, src_id))
+        # Combine points and keep newer phone/email
+        new_phone = src["phone"]
+        new_email = tgt["email"] or src["email"]
+        new_points = tgt["loyalty_points"] + src["loyalty_points"]
+        db.execute("DELETE FROM Customer WHERE customer_id=?", (src_id,))
+        db.execute("UPDATE Customer SET phone=?, email=?, loyalty_points=?, last_updated=? WHERE customer_id=?",
+                   (new_phone, new_email, new_points, now[:10], tgt_id))
+        db.execute("COMMIT")
+        updated = dict(db.execute("SELECT * FROM Customer WHERE customer_id=?", (tgt_id,)).fetchone())
+        return {"ok": True, "customer": updated}
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    finally:
+        db.close()
+
 
 # ---------- HTTP ----------
 class Handler(BaseHTTPRequestHandler):
@@ -421,6 +504,10 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and u.path == "/api/purchase": return self._send(201, record_purchase(user, self._body()))
             if method == "GET" and u.path == "/api/report/top": return self._send(200, report_top(user, q.get("month")))
             if method == "GET" and u.path == "/api/report/check": return self._send(200, report_check(user))
+            if method == "GET" and u.path == "/api/report/checks": return self._send(200, report_checks(user))
+            if method == "GET" and u.path == "/api/customer/notes": return self._send(200, list_customer_notes(q.get("customer_id")))
+            if method == "POST" and u.path == "/api/customer/notes": return self._send(201, add_customer_note(user, self._body()))
+            if method == "POST" and u.path == "/api/admin/merge-customers": return self._send(200, merge_customers(user, self._body()))
             raise ApiError(404, "Not found")
         except ApiError as e:
             self._send(e.status, {"error": e.message})
