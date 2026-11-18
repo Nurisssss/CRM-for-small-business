@@ -13,10 +13,12 @@ Managers can also open two reports. Only the Python standard library is used: no
 Demo logins (change them before any real use):
 - Employee: `aruzhan` / `cashier123`
 - Manager:  `daniyar` / `manager123`
+Shop code needed to register a new employee: `SHOP-2026` (set your own with `CRM_SHOP_CODE=yourcode python app.py`).
 Demo customer phones: `+7 700 000 01 01` ... `+7 700 000 01 04` (fictional)
 
 ## Test it
-`python test_app.py` runs 15 tests (successful and unsuccessful cases). Each line shows ok or FAIL.
+`python test_app.py` runs the main tests (successful and unsuccessful cases). Each line shows ok or FAIL.
+`python test_security.py` runs 4 security tests (login lock after 5 wrong attempts, 30-minute session expiry, shop code for registration).
 
 ## Files
 | File | What it is | Main owner for explaining it |
@@ -29,9 +31,9 @@ Demo customer phones: `+7 700 000 01 01` ... `+7 700 000 01 04` (fictional)
 | acceptance criteria of the main process | what "works" means | Aknur |
 
 ## What is NOT built yet (honest list)
-- Registering a new customer and customer notes (next team milestone)
+- Customer notes (next team milestone)
 - Merging duplicate customers; the points rule is a proposal (1 point per whole currency unit) and must be confirmed
-- Login protection against repeated wrong passwords; HTTPS; running on another computer (deployment guide)
+- HTTPS; running on another computer (deployment guide)
 
 ## AI use (the team must keep this paragraph true)
 The first version of the prototype code and the 15 tests was created with the help of an AI assistant (Claude) from our Task 9

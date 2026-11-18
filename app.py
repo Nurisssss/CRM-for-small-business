@@ -3,7 +3,7 @@ Only the Python standard library is used. Run:  python app.py   then open http:/
 Main process: employee logs in -> finds customer by phone -> adds products (optionally pays part of the bill with bonus points)
 -> card terminal result -> purchase saved in ONE transaction (stock, bonus points and the points ledger updated, or everything rolled back).
 """
-import hashlib, json, os, re, secrets, sqlite3
+import hashlib, json, os, re, secrets, sqlite3, threading, time
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +14,19 @@ DB_PATH = os.environ.get("CRM_DB", os.path.join(BASE, "crm.db"))
 PHONE_RE = re.compile(r"^\+7 \d{3} \d{3} \d{2} \d{2}$")   # Kazakhstan format: +7 XXX XXX XX XX
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")              # login name: small letters, digits, underscore
-SESSIONS = {}          # session id -> {"employee_id", "username", "role"}
+SESSIONS = {}          # session id -> {"employee_id", "username", "role", "name", "last_seen"}
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")      # simple e-mail check (optional field)
+
+# ---------- security settings (Week 12) ----------
+MAX_FAILED_LOGINS = 5                    # the 5th wrong password locks the login name; the 6th attempt gets 429
+LOCK_SECONDS = 15 * 60                   # how long the lock lasts
+SESSION_IDLE_SECONDS = 30 * 60           # a session with no request for 30 minutes expires (401)
+SHOP_CODE = os.environ.get("CRM_SHOP_CODE", "SHOP-2026")   # needed to register; set your own: CRM_SHOP_CODE=... python app.py
+FAILED = {}                              # login name -> {"count": wrong attempts in a row, "locked_until": time}
+SEC_LOCK = threading.Lock()              # the server handles requests in threads, so the counters need a lock
+
+def _now():                              # one place for the clock, so the tests can move time forward
+    return time.time()
 
 # ---------- loyalty points rules (change the numbers here; everything else uses these constants) ----------
 # All money is in US dollars ($). Points are small on purpose: 1 point = 1 cent, so a normal purchase earns a visible number of points.
@@ -72,7 +84,9 @@ def init_db():
         with open(os.path.join(BASE, "schema.sql")) as f: db.executescript(f.read())
         with open(os.path.join(BASE, "data.sql")) as f: db.executescript(f.read())
         # demo accounts (change these passwords before any real use)
-        db.execute("UPDATE Employee SET password_hash=? WHERE username='aruzhan'", (hash_pw("cashier123"),))
+        if db.execute("UPDATE Employee SET password_hash=? WHERE username='aruzhan'", (hash_pw("cashier123"),)).rowcount == 0:
+            db.execute("INSERT INTO Employee (full_name, role, username, password_hash) VALUES ('Aruzhan K.', 'Employee', 'aruzhan', ?)",
+                       (hash_pw("cashier123"),))      # data.sql in this copy has no 'aruzhan': create the demo cashier
         db.execute("UPDATE Employee SET password_hash=? WHERE username='daniyar'", (hash_pw("manager123"),))
         db.close()
     ensure_points_log()
@@ -81,13 +95,29 @@ def init_db():
 # ---------- business functions ----------
 def login(data):
     user, pw = str(data.get("username", "")), str(data.get("password", ""))
+    key = user.strip().lower()[:60]
+    with SEC_LOCK:                                    # locked? refuse before even looking at the password
+        f = FAILED.get(key)
+        if f and f["locked_until"]:
+            if f["locked_until"] > _now():
+                minutes = int((f["locked_until"] - _now()) // 60) + 1
+                raise ApiError(429, f"Too many wrong attempts. Try again in {minutes} minute(s)")
+            del FAILED[key]                           # the lock is over: start counting again
     db = connect()
     row = db.execute("SELECT * FROM Employee WHERE username=?", (user,)).fetchone()
     db.close()
     if not row or not check_pw(pw, row["password_hash"]):
+        with SEC_LOCK:                                # unknown names are counted too, so nobody can tell which names exist
+            f = FAILED.setdefault(key, {"count": 0, "locked_until": 0})
+            f["count"] += 1
+            if f["count"] >= MAX_FAILED_LOGINS:
+                f["locked_until"] = _now() + LOCK_SECONDS
         raise ApiError(401, "Wrong username or password")
+    with SEC_LOCK:
+        FAILED.pop(key, None)                         # a good login clears the counter
     sid = secrets.token_urlsafe(24)
-    SESSIONS[sid] = {"employee_id": row["employee_id"], "username": row["username"], "role": row["role"], "name": row["full_name"]}
+    SESSIONS[sid] = {"employee_id": row["employee_id"], "username": row["username"], "role": row["role"],
+                     "name": row["full_name"], "last_seen": _now()}
     return sid, SESSIONS[sid]
 
 # ---------- users: registration, adding users, passwords (Week 11) ----------
@@ -117,7 +147,10 @@ def add_user(data, role):
     finally:
         db.close()
 
-def register(data):                                   # public: anyone can create an Employee account
+def register(data):                                   # public page, but the shop code is required (Manager can also use /api/users)
+    code = str(data.get("shop_code", ""))
+    if not secrets.compare_digest(code.encode(), SHOP_CODE.encode()):
+        raise ApiError(403, "Wrong or missing shop code - ask your manager")
     return add_user(data, "Employee")
 
 def create_user(user, data):                          # Manager only: choose the role
@@ -159,6 +192,40 @@ def find_customer(user, phone):
     if user["role"] == "Manager":                       # employees do not see email or last_updated
         out.update(email=c["email"], last_updated=c["last_updated"])
     return out
+
+def normalize_phone(raw):
+    """Accepts +7 700 000 01 01, +77000000101, 87000000101, 7000000101 ... and returns the stored format, or None."""
+    s = str(raw or "").strip()
+    if PHONE_RE.match(s): return s
+    if not re.fullmatch(r"[+\d\s\-()]+", s): return None
+    digits = re.sub(r"\D", "", s)
+    if len(digits) == 11 and digits[0] in "78": digits = digits[1:]
+    elif len(digits) != 10: return None
+    return f"+7 {digits[0:3]} {digits[3:6]} {digits[6:8]} {digits[8:10]}"
+
+def create_customer(user, data):
+    """Any logged-in employee can register a new loyalty customer (starts with 0 points)."""
+    name = str(data.get("full_name") or data.get("name") or "").strip()
+    phone = normalize_phone(data.get("phone"))
+    email = str(data.get("email") or "").strip()
+    if not (2 <= len(name) <= 80):
+        raise ApiError(400, "Full name must be 2-80 characters")
+    if not phone:
+        raise ApiError(400, "Phone must look like +7 700 000 01 01")
+    if email and (len(email) > 100 or not EMAIL_RE.match(email)):
+        raise ApiError(400, "E-mail is not valid (or leave it empty)")
+    db = connect()
+    try:
+        if db.execute("SELECT 1 FROM Customer WHERE phone=?", (phone,)).fetchone():
+            raise ApiError(409, f"A customer with the phone {phone} already exists - find them by phone")
+        try:
+            db.execute("INSERT INTO Customer (full_name, phone, email, loyalty_points, last_updated) VALUES (?,?,?,0,?)",
+                       (name, phone, email or None, datetime.now().strftime("%Y-%m-%d")))
+        except sqlite3.IntegrityError:                # two people registered the same phone at the same moment
+            raise ApiError(409, f"A customer with the phone {phone} already exists - find them by phone")
+    finally:
+        db.close()
+    return find_customer(user, phone)
 
 def list_products():
     db = connect()
@@ -306,7 +373,13 @@ class Handler(BaseHTTPRequestHandler):
     def _user(self):
         for part in self.headers.get("Cookie", "").split(";"):
             k, _, v = part.strip().partition("=")
-            if k == "sid" and v in SESSIONS: return SESSIONS[v]
+            if k == "sid" and v in SESSIONS:
+                s = SESSIONS[v]
+                if _now() - s["last_seen"] > SESSION_IDLE_SECONDS:      # idle too long: the session is deleted
+                    SESSIONS.pop(v, None)
+                    raise ApiError(401, "Session expired - please log in again")
+                s["last_seen"] = _now()                                  # every request moves the 30 minutes forward
+                return s
         raise ApiError(401, "Please log in")
 
     def _body(self):
@@ -336,11 +409,12 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and u.path == "/api/logout":
                 for k in [k for k, v in SESSIONS.items() if v is user]: del SESSIONS[k]
                 return self._send(200, {"ok": True}, {"Set-Cookie": "sid=; Max-Age=0; Path=/"})
-            if method == "GET" and u.path == "/api/me": return self._send(200, user)
+            if method == "GET" and u.path == "/api/me": return self._send(200, {k: v for k, v in user.items() if k != "last_seen"})
             if method == "POST" and u.path == "/api/password": return self._send(200, change_password(user, self._body()))
             if method == "POST" and u.path == "/api/users": return self._send(201, create_user(user, self._body()))
             if method == "GET" and u.path == "/api/users": return self._send(200, list_users(user))
             if method == "GET" and u.path == "/api/customer": return self._send(200, find_customer(user, q.get("phone")))
+            if method == "POST" and u.path in ("/api/customer", "/api/customer/register"): return self._send(201, create_customer(user, self._body()))
             if method == "GET" and u.path == "/api/products": return self._send(200, list_products())
             if method == "GET" and u.path == "/api/rules": return self._send(200, points_rules())
             if method == "GET" and u.path == "/api/points-log": return self._send(200, points_history(q.get("customer_id")))
@@ -364,6 +438,7 @@ def make_server(port=8000):
 if __name__ == "__main__":
     srv = make_server()
     print("CRM prototype running on http://localhost:8000  (Ctrl+C to stop)")
+    print(f"Shop code for registering new employees: {SHOP_CODE}  (change it: CRM_SHOP_CODE=yourcode python app.py)")
     print("Demo logins: aruzhan / cashier123 (Employee)   daniyar / manager123 (Manager)")
     try: srv.serve_forever()
     except KeyboardInterrupt: print("\nStopped")

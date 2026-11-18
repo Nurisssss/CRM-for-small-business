@@ -20,7 +20,8 @@
   <h2>Create an account</h2>
   <input id="rn" placeholder="Full name" autocomplete="name"> <input id="ru" placeholder="Username (a-z, 0-9, _)" autocomplete="username"><br>
   <input id="rp" type="password" placeholder="Password (8+, letter and digit)" autocomplete="new-password" size="30">
-  <input id="rp2" type="password" placeholder="Repeat password" autocomplete="new-password">
+  <input id="rp2" type="password" placeholder="Repeat password" autocomplete="new-password"><br>
+  <input id="rcode" placeholder="Shop code (ask your manager)" autocomplete="off" size="30">
   <button onclick="register()">Create account</button>
   <div id="regMsg"></div>
   <p><small>New accounts get the Employee role. <a href="#" onclick="toggleReg(false);return false">Back to log in</a></small></p>
@@ -40,6 +41,13 @@
     <input id="phone" size="22" placeholder="+7 700 000 01 01"> <button onclick="findCustomer()">Find by phone</button>
     <div id="custMsg"></div>
     <div id="hist"></div>
+    <p style="margin:12px 0 0"><small>Not found? <a href="#" onclick="toggleNewCust();return false">Register a new customer</a></small></p>
+    <div id="ncBox" class="hidden" style="margin-top:8px">
+      <input id="ncName" placeholder="Full name" autocomplete="off"> <input id="ncPhone" placeholder="+7 700 000 01 01" size="18" autocomplete="off">
+      <input id="ncEmail" type="email" placeholder="E-mail (optional)" autocomplete="off">
+      <button onclick="addCustomer()">Create customer</button>
+      <div id="ncMsg"></div>
+    </div>
   </div>
 
   <div class="box"><h2><span class="step">2</span> Add products</h2>
@@ -75,6 +83,10 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 async function api(path, opts){
   const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts));
   const j = await r.json().catch(()=>({}));
+  if(r.status===401 && !["/api/login","/api/me"].includes(path)){   // session expired (30 min idle): back to the login screen
+    try{ sessionStorage.setItem("expired","1"); }catch(e){}
+    location.reload();
+  }
   if(!r.ok) throw new Error(j.error || "Error "+r.status);
   return j;
 }
@@ -127,6 +139,16 @@ async function findCustomer(clear=true){
     show("custMsg", `<b>${esc(c.full_name)}</b> - ${esc(c.phone)} - loyalty points: <b>${c.loyalty_points}</b>`+(c.email?` - ${esc(c.email)}`:"")); }
   catch(e){ show("custMsg", esc(e.message), true); recalc(); }
 }
+function toggleNewCust(){ $("ncBox").classList.toggle("hidden"); show("ncMsg",""); }
+async function addCustomer(){ // the server checks the phone, the name and duplicates; this only shows the answer
+  try{
+    const c = await api("/api/customer",{method:"POST",body:JSON.stringify({full_name:$("ncName").value,phone:$("ncPhone").value,email:$("ncEmail").value})});
+    $("ncName").value = $("ncPhone").value = $("ncEmail").value = "";
+    $("phone").value = c.phone;
+    await findCustomer();                                   // find the new customer by phone, ready for a purchase
+    show("ncMsg", `Customer <b>${esc(c.full_name)}</b> created: ${esc(c.phone)}`);
+  }catch(e){ show("ncMsg", esc(e.message), true); }
+}
 async function pay(result){
   if(!customer) return show("payMsg","Find the customer first",true);
   if(!items().length) return show("payMsg","Add at least one product",true);
@@ -145,7 +167,7 @@ function toggleReg(on){ $("regBox").classList.toggle("hidden", !on); $("loginBox
 async function register(){ // the server checks everything again; these checks only give a faster answer
   if($("rp").value !== $("rp2").value) return show("regMsg","Passwords do not match",true);
   try{
-    const r = await api("/api/register",{method:"POST",body:JSON.stringify({full_name:$("rn").value,username:$("ru").value,password:$("rp").value})});
+    const r = await api("/api/register",{method:"POST",body:JSON.stringify({full_name:$("rn").value,username:$("ru").value,password:$("rp").value,shop_code:$("rcode").value.trim()})});
     const u = await api("/api/login",{method:"POST",body:JSON.stringify({username:r.username,password:$("rp").value})});
     $("regBox").classList.add("hidden"); start(u);
   }catch(e){ show("regMsg", esc(e.message), true); }
@@ -162,5 +184,7 @@ async function addUser(){
   catch(e){ show("usrMsg", esc(e.message), true); }
 }
 async function listUsers(){ try{ $("usrOut").innerHTML = table(await api("/api/users")); }catch(e){ show("usrMsg", esc(e.message), true); } }
-api("/api/me").then(start).catch(()=>{});
+api("/api/me").then(start).catch(()=>{
+  try{ if(sessionStorage.getItem("expired")){ sessionStorage.removeItem("expired"); show("loginMsg","Session expired after 30 minutes without activity - please log in again",true); } }catch(e){}
+});
 </script></body></html>
