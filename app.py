@@ -517,10 +517,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self): self._handle("GET")
     def do_POST(self): self._handle("POST")
 
+class ThreadedServer(ThreadingHTTPServer):
+    request_queue_size = 128
 
 def make_server(port=8000):
     init_db()
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return ThreadedServer(("127.0.0.1", port), Handler)
 
 if __name__ == "__main__":
     srv = make_server()

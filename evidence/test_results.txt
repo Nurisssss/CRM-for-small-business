@@ -1,33 +1,105 @@
-test_01_login_ok (__main__.CrmTests.test_01_login_ok) ... ok
-test_02_wrong_password_refused (__main__.CrmTests.test_02_wrong_password_refused) ... ok
-test_03_no_login_refused (__main__.CrmTests.test_03_no_login_refused) ... ok
-test_04_find_customer (__main__.CrmTests.test_04_find_customer) ... ok
-test_05_employee_does_not_see_email (__main__.CrmTests.test_05_employee_does_not_see_email) ... ok
-test_06_wrong_phone_format_refused (__main__.CrmTests.test_06_wrong_phone_format_refused) ... ok
-test_07_unknown_customer_refused (__main__.CrmTests.test_07_unknown_customer_refused) ... ok
-test_08_purchase_saved_stock_and_points (__main__.CrmTests.test_08_purchase_saved_stock_and_points) ... ok
-test_09_not_enough_stock_rolls_back (__main__.CrmTests.test_09_not_enough_stock_rolls_back) ... ok
-test_10_declined_payment_saves_nothing (__main__.CrmTests.test_10_declined_payment_saves_nothing) ... ok
-test_11_unknown_customer_purchase_refused (__main__.CrmTests.test_11_unknown_customer_purchase_refused) ... ok
-test_12_negative_quantity_refused (__main__.CrmTests.test_12_negative_quantity_refused) ... ok
-test_13_employee_cannot_open_reports (__main__.CrmTests.test_13_employee_cannot_open_reports) ... ok
-test_14_manager_top_customer_report (__main__.CrmTests.test_14_manager_top_customer_report) ... ok
-test_15_totals_check_has_no_mismatch (__main__.CrmTests.test_15_totals_check_has_no_mismatch) ... ok
-test_16_customer_notes_add (__main__.CrmTests.test_16_customer_notes_add) ... ok
-test_17_customer_notes_refused_for_unknown (__main__.CrmTests.test_17_customer_notes_refused_for_unknown) ... ok
-test_18_merge_customers (__main__.CrmTests.test_18_merge_customers) ... ok
-test_19_customer_registration_success (__main__.CrmTests.test_19_customer_registration_success) ... ok
-test_20_customer_registration_duplicate_phone (__main__.CrmTests.test_20_customer_registration_duplicate_phone) ... ok
-test_21_loyalty_points_calculation (__main__.CrmTests.test_21_loyalty_points_calculation) ... ok
-test_22_manager_checks_sql_query (__main__.CrmTests.test_22_manager_checks_sql_query) ... ok
-test_23_employee_unauthorized_action (__main__.CrmTests.test_23_employee_unauthorized_action)
-Test 23: an employee cannot merge customers ... ok
-test_24_rules_endpoint (__main__.CrmTests.test_24_rules_endpoint)
-Test 24: points rules ... ok
-test_25_points_history (__main__.CrmTests.test_25_points_history)
-Test 25: points history ... ok
+test_01_login_ok (test_app.CrmTests.test_01_login_ok) ... ok
+
+test_02_wrong_password_refused (test_app.CrmTests.test_02_wrong_password_refused) ... ok
+
+test_03_no_login_refused (test_app.CrmTests.test_03_no_login_refused) ... ok
+
+test_04_find_customer (test_app.CrmTests.test_04_find_customer) ... ok
+
+test_05_employee_does_not_see_email (test_app.CrmTests.test_05_employee_does_not_see_email) ... ok
+
+test_06_wrong_phone_format_refused (test_app.CrmTests.test_06_wrong_phone_format_refused) ... ok
+
+test_07_unknown_customer_refused (test_app.CrmTests.test_07_unknown_customer_refused) ... ok
+
+test_08_purchase_saved_stock_and_points (test_app.CrmTests.test_08_purchase_saved_stock_and_points) ... ok
+
+test_09_not_enough_stock_rolls_back (test_app.CrmTests.test_09_not_enough_stock_rolls_back) ... ok
+
+test_10_declined_payment_saves_nothing (test_app.CrmTests.test_10_declined_payment_saves_nothing) ... ok
+
+test_11_unknown_customer_purchase_refused (test_app.CrmTests.test_11_unknown_customer_purchase_refused) ... ok
+
+test_12_negative_quantity_refused (test_app.CrmTests.test_12_negative_quantity_refused) ... ok
+
+test_13_employee_cannot_open_reports (test_app.CrmTests.test_13_employee_cannot_open_reports) ... ok
+
+test_14_manager_top_customer_report (test_app.CrmTests.test_14_manager_top_customer_report) ... ok
+
+test_15_totals_check_has_no_mismatch (test_app.CrmTests.test_15_totals_check_has_no_mismatch) ... ok
+
+test_16_customer_notes_add (test_app.CrmTests.test_16_customer_notes_add) ... ok
+
+test_17_customer_notes_refused_for_unknown (test_app.CrmTests.test_17_customer_notes_refused_for_unknown) ... ok
+
+test_18_merge_customers (test_app.CrmTests.test_18_merge_customers) ... ok
+
+test_19_customer_registration_success (test_app.CrmTests.test_19_customer_registration_success) ... ok
+
+test_20_customer_registration_duplicate_phone (test_app.CrmTests.test_20_customer_registration_duplicate_phone) ... ok
+
+test_21_loyalty_points_calculation (test_app.CrmTests.test_21_loyalty_points_calculation) ... ok
+
+test_22_manager_checks_sql_query (test_app.CrmTests.test_22_manager_checks_sql_query) ... ok
+
+test_23_employee_unauthorized_action (test_app.CrmTests.test_23_employee_unauthorized_action) ... ok
+
+test_24_rules_endpoint (test_app.CrmTests.test_24_rules_endpoint) ... ok
+
+test_25_points_history (test_app.CrmTests.test_25_points_history) ... ok
+
+test_26_employee_register_success (test_app.CrmTests.test_26_employee_register_success) ... ok
+
+test_27_employee_register_wrong_shop_code_refused (test_app.CrmTests.test_27_employee_register_wrong_shop_code_refused) ... ok
+
+test_28_employee_register_weak_password_refused (test_app.CrmTests.test_28_employee_register_weak_password_refused) ... ok
+
+test_29_employee_register_duplicate_username_refused (test_app.CrmTests.test_29_employee_register_duplicate_username_refused) ... ok
+
+test_30_password_change_success (test_app.CrmTests.test_30_password_change_success) ... ok
+
+test_31_password_change_wrong_current_refused (test_app.CrmTests.test_31_password_change_wrong_current_refused) ... ok
+
+test_32_password_change_weak_new_password_refused (test_app.CrmTests.test_32_password_change_weak_new_password_refused) ... ok
+
+test_33_password_change_requires_login (test_app.CrmTests.test_33_password_change_requires_login) ... ok
+
+test_34_manager_list_users_hides_password_hashes (test_app.CrmTests.test_34_manager_list_users_hides_password_hashes) ... ok
+
+test_35_employee_cannot_list_users (test_app.CrmTests.test_35_employee_cannot_list_users) ... ok
+
+test_36_manager_create_manager_user (test_app.CrmTests.test_36_manager_create_manager_user) ... ok
+
+test_37_manager_create_user_invalid_role_refused (test_app.CrmTests.test_37_manager_create_user_invalid_role_refused) ... ok
+
+test_38_customer_registration_with_email_and_role_visibility (test_app.CrmTests.test_38_customer_registration_with_email_and_role_visibility) ... ok
+
+test_39_customer_registration_invalid_phone_refused (test_app.CrmTests.test_39_customer_registration_invalid_phone_refused) ... ok
+
+test_40_customer_registration_invalid_email_refused (test_app.CrmTests.test_40_customer_registration_invalid_email_refused) ... ok
+
+test_41_customer_registration_short_name_refused (test_app.CrmTests.test_41_customer_registration_short_name_refused) ... ok
+
+
 
 ----------------------------------------------------------------------
-Ran 25 tests in 1.792s
+
+Ran 41 tests in 8.371s
+
+
 
 OK
+
+
+
+======================================================================
+
+NFR-01 Load Test Results (50 concurrent requests):
+
+  Succeeded (HTTP 200): 50/50
+
+  Total wall-clock time: 58.48 ms (0.058 s)
+
+  Average latency:       23.13 ms
+
+  Min / Max latency:     8.54 ms / 44.86 ms
