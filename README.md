@@ -20,6 +20,14 @@ Demo customer phones: `+7 700 000 01 01` ... `+7 700 000 01 04` (fictional)
 `python test_app.py` runs the main tests (successful and unsuccessful cases). Each line shows ok or FAIL.
 `python test_security.py` runs 4 security tests (login lock after 5 wrong attempts, 30-minute session expiry, shop code for registration).
 
+## Backup and restore (Inkar)
+`python backup_db.py backup` copies `crm.db` to `backups/crm_YYYY-MM-DD_HH-MM-SS.db` (safe while the program is running).
+`python backup_db.py list` shows the backups. `python backup_db.py restore` brings back the newest backup
+(`restore FILE` for a chosen one; it asks you to type YES, or add `--yes`). Before every restore the current data is saved as
+`backups/crm_before_restore_<date>.db`, so a restore can itself be undone. Stop and start `python app.py` after a restore.
+Demo: register a customer, run `backup`, then `python backup_db.py delete-customer "+7 777 123 45 67"`, then `restore`: the customer is back.
+`python test_backup.py` runs 6 tests on a temporary database (never on your real `crm.db`).
+
 ## Files
 | File | What it is | Main owner for explaining it |
 |---|---|---|
@@ -27,6 +35,7 @@ Demo customer phones: `+7 700 000 01 01` ... `+7 700 000 01 04` (fictional)
 | data.sql | fictional sample data | Inkar |
 | index.html | the screen the user sees | Almas |
 | app.py - login, roles, passwords, transaction | security and the "record a purchase" transaction | Nurislam |
+| backup_db.py, test_backup.py | backup, restore, and their 6 tests | Inkar |
 | test_app.py | 15 automated tests | Akbota |
 | acceptance criteria of the main process | what "works" means | Aknur |
 
