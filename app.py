@@ -1,4 +1,4 @@
-"""CRM for Small Business - prototype (Week 10).
+"""CRM for Small Business - prototype (Week 13).
 Only the Python standard library is used. Run:  python app.py   then open http://localhost:8000
 Main process: employee logs in -> finds customer by phone -> adds products (optionally pays part of the bill with bonus points)
 -> card terminal result -> purchase saved in ONE transaction (stock, bonus points and the points ledger updated, or everything rolled back).
@@ -78,6 +78,13 @@ def ensure_points_log():
                    "SELECT customer_id, NULL, loyalty_points, 'opening', datetime('now') FROM Customer WHERE loyalty_points > 0")
     db.close()
 
+def ensure_client_support():
+    """Runs at every start (old crm.db too): adds the login column for client accounts to Customer."""
+    db = connect()
+    if "password_hash" not in [r["name"] for r in db.execute("PRAGMA table_info(Customer)")]:
+        db.execute("ALTER TABLE Customer ADD COLUMN password_hash VARCHAR(255)")
+    db.close()
+
 def init_db():
     if not os.path.exists(DB_PATH):
         db = connect()
@@ -90,6 +97,7 @@ def init_db():
         db.execute("UPDATE Employee SET password_hash=? WHERE username='daniyar'", (hash_pw("manager123"),))
         db.close()
     ensure_points_log()
+    ensure_client_support()
 
 
 # ---------- business functions ----------
@@ -226,6 +234,94 @@ def create_customer(user, data):
     finally:
         db.close()
     return find_customer(user, phone)
+
+# ---------- client accounts: sign up, log in, own page (Week 13) ----------
+def _client_session(customer_id, name, phone):
+    sid = secrets.token_urlsafe(24)
+    SESSIONS[sid] = {"customer_id": customer_id, "username": phone, "role": "Client", "name": name, "last_seen": _now()}
+    return sid, SESSIONS[sid]
+
+def client_register(data):
+    """A new client signs up alone: full name, phone, e-mail (required) and a checked password. He is logged in at once.
+    A phone that the shop already has in Customer cannot be taken over from the web page (there is no proof that the phone is his)."""
+    name = str(data.get("full_name") or "").strip()
+    phone = normalize_phone(data.get("phone"))
+    email = str(data.get("email") or "").strip()
+    password = data.get("password", "")
+    if not (2 <= len(name) <= 80): raise ApiError(400, "Full name must be 2-80 characters")
+    if not phone: raise ApiError(400, "Phone must look like +7 700 000 01 01")
+    if not email or len(email) > 100 or not EMAIL_RE.match(email): raise ApiError(400, "A valid e-mail is required")
+    validate_password(password)
+    db = connect()
+    try:
+        c = db.execute("SELECT password_hash FROM Customer WHERE phone=?", (phone,)).fetchone()
+        if c and c["password_hash"]:
+            raise ApiError(409, "This phone already has an account - please log in")
+        if c:
+            raise ApiError(409, "This phone is already in the shop's records - ask the cashier to open your account")
+        try:
+            cid = db.execute("INSERT INTO Customer (full_name, phone, email, loyalty_points, last_updated, password_hash) VALUES (?,?,?,0,?,?)",
+                             (name, phone, email, datetime.now().strftime("%Y-%m-%d"), hash_pw(password))).lastrowid
+        except sqlite3.IntegrityError:                # the same phone registered at the same moment
+            raise ApiError(409, "This phone already has an account - please log in")
+    finally:
+        db.close()
+    return _client_session(cid, name, phone)
+
+def client_login(data):
+    phone = normalize_phone(data.get("phone"))
+    pw = str(data.get("password", ""))
+    key = "client:" + (phone or str(data.get("phone", ""))[:30])
+    with SEC_LOCK:                                    # same lock rule as staff: 5 wrong passwords lock for 15 minutes
+        f = FAILED.get(key)
+        if f and f["locked_until"]:
+            if f["locked_until"] > _now():
+                raise ApiError(429, f"Too many wrong attempts. Try again in {int((f['locked_until'] - _now()) // 60) + 1} minute(s)")
+            del FAILED[key]
+    row = None
+    if phone:
+        db = connect()
+        row = db.execute("SELECT customer_id, full_name, password_hash FROM Customer WHERE phone=?", (phone,)).fetchone()
+        db.close()
+    if not row or not row["password_hash"] or not check_pw(pw, row["password_hash"]):
+        with SEC_LOCK:
+            f = FAILED.setdefault(key, {"count": 0, "locked_until": 0})
+            f["count"] += 1
+            if f["count"] >= MAX_FAILED_LOGINS: f["locked_until"] = _now() + LOCK_SECONDS
+        raise ApiError(401, "Wrong phone or password")
+    with SEC_LOCK: FAILED.pop(key, None)
+    return _client_session(row["customer_id"], row["full_name"], phone)
+
+def require_client(user):
+    if user["role"] != "Client":
+        raise ApiError(403, "Only for client accounts")
+
+def client_me(user):
+    require_client(user)
+    db = connect()
+    c = db.execute("SELECT full_name, phone, email, loyalty_points, last_updated FROM Customer WHERE customer_id=?", (user["customer_id"],)).fetchone()
+    db.close()
+    if not c: raise ApiError(404, "Customer not found")
+    return dict(c)
+
+def client_points(user):
+    require_client(user)
+    return points_history(user["customer_id"])
+
+def client_change_password(user, data):
+    require_client(user)
+    old, new = data.get("current_password", ""), data.get("new_password", "")
+    validate_password(new)
+    db = connect()
+    try:
+        row = db.execute("SELECT password_hash FROM Customer WHERE customer_id=?", (user["customer_id"],)).fetchone()
+        if not row or not row["password_hash"] or not check_pw(str(old), row["password_hash"]):
+            raise ApiError(403, "Current password is wrong")
+        db.execute("UPDATE Customer SET password_hash=? WHERE customer_id=?", (hash_pw(new), user["customer_id"]))
+        return {"ok": True}
+    finally:
+        db.close()
+
 
 def list_products():
     db = connect()
@@ -434,6 +530,7 @@ def merge_customers(user, data):
                    (new_phone, new_email, new_points, now[:10], tgt_id))
         db.execute("COMMIT")
         updated = dict(db.execute("SELECT * FROM Customer WHERE customer_id=?", (tgt_id,)).fetchone())
+        updated.pop("password_hash", None)                # never send a password hash to the browser
         return {"ok": True, "customer": updated}
     except Exception:
         db.execute("ROLLBACK")
@@ -443,6 +540,8 @@ def merge_customers(user, data):
 
 
 # ---------- HTTP ----------
+CLIENT_ROUTES = {("POST", "/api/logout"), ("GET", "/api/me"), ("GET", "/api/client/me"), ("GET", "/api/client/points"), ("POST", "/api/client/password")}
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
@@ -488,7 +587,16 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
             if method == "POST" and u.path == "/api/register":
                 return self._send(201, register(self._body()))
+            if method == "POST" and u.path in ("/api/client/register", "/api/client/login"):
+                sid, s = (client_register if u.path.endswith("register") else client_login)(self._body())
+                return self._send(201 if u.path.endswith("register") else 200, {"username": s["username"], "role": s["role"], "name": s["name"]},
+                                  {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
             user = self._user()
+            if user["role"] == "Client":                  # a client sees only his own account: every staff route is closed
+                if (method, u.path) not in CLIENT_ROUTES: raise ApiError(403, "Clients can only open their own account")
+                if (method, u.path) == ("GET", "/api/client/me"): return self._send(200, client_me(user))
+                if (method, u.path) == ("GET", "/api/client/points"): return self._send(200, client_points(user))
+                if (method, u.path) == ("POST", "/api/client/password"): return self._send(200, client_change_password(user, self._body()))
             if method == "POST" and u.path == "/api/logout":
                 for k in [k for k, v in SESSIONS.items() if v is user]: del SESSIONS[k]
                 return self._send(200, {"ok": True}, {"Set-Cookie": "sid=; Max-Age=0; Path=/"})
@@ -529,5 +637,6 @@ if __name__ == "__main__":
     print("CRM prototype running on http://localhost:8000  (Ctrl+C to stop)")
     print(f"Shop code for registering new employees: {SHOP_CODE}  (change it: CRM_SHOP_CODE=yourcode python app.py)")
     print("Demo logins: aruzhan / cashier123 (Employee)   daniyar / manager123 (Manager)")
+    print("Clients: sign up on the page (Client log in / sign up)")
     try: srv.serve_forever()
     except KeyboardInterrupt: print("\nStopped")

@@ -14,6 +14,26 @@
   <button onclick="login()">Log in</button>
   <div id="loginMsg"></div>
   <p><small>No account? <a href="#" onclick="toggleReg(true);return false">Register</a></small></p>
+  <p><small>Customer of the shop? <a href="#" onclick="toggleClient('login');return false">Client log in / sign up</a></small></p>
+</div>
+
+<div id="clLoginBox" class="box hidden">
+  <h2>Client log in</h2>
+  <input id="clPhone" placeholder="Phone +7 700 000 01 01" size="22" autocomplete="tel"> <input id="clPw" type="password" placeholder="Password" autocomplete="current-password">
+  <button onclick="clientLogin()">Log in</button>
+  <div id="clLoginMsg"></div>
+  <p><small>New client? <a href="#" onclick="toggleClient('reg');return false">Sign up</a> &middot; Staff? <a href="#" onclick="toggleClient('off');return false">Staff log in</a></small></p>
+</div>
+
+<div id="clRegBox" class="box hidden">
+  <h2>Client sign up</h2>
+  <input id="crName" placeholder="Full name" autocomplete="name"> <input id="crPhone" placeholder="Phone +7 700 000 01 01" size="22" autocomplete="tel"><br>
+  <input id="crEmail" type="email" placeholder="E-mail" size="30" autocomplete="email"><br>
+  <input id="crPw" type="password" placeholder="Password (8+, letter and digit)" size="30" autocomplete="new-password">
+  <input id="crPw2" type="password" placeholder="Repeat password" autocomplete="new-password">
+  <button onclick="clientSignup()">Create account</button>
+  <div id="crMsg"></div>
+  <p><small>Already have an account? <a href="#" onclick="toggleClient('login');return false">Log in</a></small></p>
 </div>
 
 <div id="regBox" class="box hidden">
@@ -25,6 +45,17 @@
   <button onclick="register()">Create account</button>
   <div id="regMsg"></div>
   <p><small>New accounts get the Employee role. <a href="#" onclick="toggleReg(false);return false">Back to log in</a></small></p>
+</div>
+
+<div id="clientApp" class="hidden">
+  <div class="box top"><div id="clWho"></div><div><button class="secondary" onclick="$('clPwBox').classList.toggle('hidden')">Change password</button> <button class="secondary" onclick="logout()">Log out</button></div></div>
+  <div id="clPwBox" class="box hidden"><h2>Change my password</h2>
+    <input id="ccp" type="password" placeholder="Current password" autocomplete="current-password">
+    <input id="cnp" type="password" placeholder="New password" autocomplete="new-password">
+    <input id="cnp2" type="password" placeholder="Repeat new password" autocomplete="new-password">
+    <button onclick="clientChangePw()">Save password</button><div id="clPwMsg"></div>
+  </div>
+  <div class="box"><h2>My loyalty account</h2><div id="clInfo"></div><div id="clHist"></div></div>
 </div>
 
 <div id="app" class="hidden">
@@ -83,7 +114,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 async function api(path, opts){
   const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts));
   const j = await r.json().catch(()=>({}));
-  if(r.status===401 && !["/api/login","/api/me"].includes(path)){   // session expired (30 min idle): back to the login screen
+  if(r.status===401 && !["/api/login","/api/me","/api/client/login"].includes(path)){   // session expired (30 min idle): back to the login screen
     try{ sessionStorage.setItem("expired","1"); }catch(e){}
     location.reload();
   }
@@ -96,7 +127,8 @@ async function login(){
   catch(e){ show("loginMsg", esc(e.message), true); }
 }
 async function start(u){
-  $("loginBox").classList.add("hidden"); $("app").classList.remove("hidden");
+  if(u.role === "Client") return startClient(u);
+  ["loginBox","clLoginBox","clRegBox"].forEach(id=>$(id).classList.add("hidden")); $("app").classList.remove("hidden");
   $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
   $("mgr").classList.toggle("hidden", u.role !== "Manager"); $("usr").classList.toggle("hidden", u.role !== "Manager");
   products = await api("/api/products");
@@ -184,6 +216,36 @@ async function addUser(){
   catch(e){ show("usrMsg", esc(e.message), true); }
 }
 async function listUsers(){ try{ $("usrOut").innerHTML = table(await api("/api/users")); }catch(e){ show("usrMsg", esc(e.message), true); } }
+
+function toggleClient(mode){ // 'login' | 'reg' | 'off'
+  ["loginBox","regBox","clLoginBox","clRegBox"].forEach(id=>$(id).classList.add("hidden"));
+  $({login:"clLoginBox", reg:"clRegBox", off:"loginBox"}[mode]).classList.remove("hidden");
+  ["clLoginMsg","crMsg"].forEach(id=>show(id,""));
+}
+async function clientSignup(){ // the server checks everything again; these checks only give a faster answer
+  if($("crPw").value !== $("crPw2").value) return show("crMsg","Passwords do not match",true);
+  try{ const u = await api("/api/client/register",{method:"POST",body:JSON.stringify({full_name:$("crName").value,phone:$("crPhone").value,email:$("crEmail").value,password:$("crPw").value})}); start(u); }
+  catch(e){ show("crMsg", esc(e.message), true); }
+}
+async function clientLogin(){
+  try{ const u = await api("/api/client/login",{method:"POST",body:JSON.stringify({phone:$("clPhone").value,password:$("clPw").value})}); start(u); }
+  catch(e){ show("clLoginMsg", esc(e.message), true); }
+}
+async function startClient(u){
+  ["loginBox","regBox","clLoginBox","clRegBox","app"].forEach(id=>$(id).classList.add("hidden")); $("clientApp").classList.remove("hidden");
+  $("clWho").innerHTML = `Logged in as <b>${esc(u.name)}</b> (Client)`;
+  const me = await api("/api/client/me");
+  $("clInfo").innerHTML = `<p style="margin:0 0 6px">Phone: <b>${esc(me.phone)}</b> &middot; E-mail: <b>${esc(me.email || "-")}</b></p><p class="total">Bonus points: ${me.loyalty_points} <small>(= $${(me.loyalty_points/100).toFixed(2)})</small></p>`;
+  try{ const rows = await api("/api/client/points");
+    $("clHist").innerHTML = rows.length ? "<p style='margin:14px 0 4px'><small>Points history (newest first)</small></p>" + table(rows.map(r=>({When:r.created_at, Change:(r.points_change>0?"+":"")+r.points_change, Reason:r.reason}))) : "<small>No points history yet.</small>";
+  }catch(e){ $("clHist").innerHTML = ""; }
+}
+async function clientChangePw(){
+  if($("cnp").value !== $("cnp2").value) return show("clPwMsg","New passwords do not match",true);
+  try{ await api("/api/client/password",{method:"POST",body:JSON.stringify({current_password:$("ccp").value,new_password:$("cnp").value})});
+    show("clPwMsg","Password changed"); $("ccp").value=$("cnp").value=$("cnp2").value=""; }
+  catch(e){ show("clPwMsg", esc(e.message), true); }
+}
 api("/api/me").then(start).catch(()=>{
   try{ if(sessionStorage.getItem("expired")){ sessionStorage.removeItem("expired"); show("loginMsg","Session expired after 30 minutes without activity - please log in again",true); } }catch(e){}
 });
