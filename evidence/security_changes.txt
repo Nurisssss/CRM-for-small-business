@@ -1,0 +1,163 @@
+
+Topic: IP-based login rate limiting
+Files changed: app.py and test_security.py
+Purpose: Prevent a user from bypassing the failed-login limit simply by
+         changing the username (or switching between staff and customer login).
+
+1. BACKGROUND: THE ORIGINAL BEHAVIOUR
+The application already had a failed-login protection mechanism:
+
+  - Maximum failed attempts: 5
+  - Temporary lock duration: 15 minutes
+  - A request made while the lock is active is rejected with HTTP 429.
+
+However, the FAILED dictionary was keyed by the login identifier rather than
+by the source IP address.
+
+The customer login function used a key based on the customer's phone number.
+As a result, the counter was associated with an individual login identifier.
+Trying different usernames (or customer phone numbers) could therefore create
+different counters instead of sharing one counter for the same source address.
+
+The original security test checked five failed attempts using the same staff
+username. That test verified the five-attempt rule for one account, but it did
+not check whether changing usernames could get around the rule.
+
+2. IMPLEMENTATION CHANGES IN app.py
+I kept the existing five-attempt threshold and 15-minute lock duration. I
+changed what identifies the failed-login counter.
+
+Both login functions now accept the client's IP address:
+
+    def login(data, client_ip="unknown"):
+
+    def client_login(data, client_ip="unknown"):
+
+The HTTP request handler passes the address of the connected client to the
+relevant login function:
+
+    login(self._body(), self.client_address[0])
+
+For customer login, the handler similarly calls client_login with
+self.client_address[0]. This means staff and customer login requests from the
+same client address use the same IP-based failed-attempt counter.
+
+The existing lock behaviour remains in place:
+
+  - Failed credentials increase the counter for the IP address.
+  - Once the counter reaches five, the lock expiry is set to the current time
+    plus 15 minutes.
+  - While the lock is active, the login request is rejected with HTTP 429,
+    before the credentials are checked.
+  - When the lock expires, the counter can start again.
+  - A successful login clears the counter associated with that IP.
+
+The existing threading lock (SEC_LOCK) is retained so that access to the
+shared FAILED dictionary is protected when the server handles requests in
+multiple threads.
+
+3. SECURITY TEST CHANGES IN test_security.py
+I updated the first security test to check the bypass scenario directly.
+Instead of submitting five wrong passwords for one username, the test submits
+five wrong passwords with five different usernames:
+
+    [c.login(f"random_user_{i}", "wrong")[0] for i in range(5)]
+
+The test expects all five requests to return HTTP 401 because each request
+contains invalid credentials. It then tries a different username with a
+correct password and expects HTTP 429. This checks that changing the username
+does not avoid the IP-based lock.
+
+The same test then sends a request to the customer login endpoint and expects
+HTTP 429 as well. This checks that the staff and customer login endpoints
+share the IP-based restriction when requests come from the same address.
+
+Finally, the test advances the fake clock by LOCK_SECONDS plus one second and
+checks that login is possible again. The fake clock is used so the test does
+not have to wait for the real 15-minute lock period.
+
+The other security tests remain in the file. They continue to cover session
+expiration and employee registration with and without the required shop code.
+
+4. TEST EXECUTION AND RESULT
+
+Result from the updated test file:
+
+    test_01_username_rotation_does_not_bypass_ip_lock ... ok
+    test_02_expired_session_gives_401 ... ok
+    test_03_registration_without_shop_code_refused ... ok
+    test_04_registration_with_shop_code_works ... ok
+
+    Ran 4 tests in 0.650s
+
+    OK
+
+The test run completed successfully: 4 tests passed, 0 failed.
+
+5. BEFORE-AND-AFTER SCENARIO
+Scenario: five incorrect login attempts are sent from the same client address,
+but each attempt uses a different username.
+
+Before the change:
+  - The failed-attempt counter was associated with each username.
+  - Rotating usernames could avoid reaching the limit for one username.
+  - The previous test did not cover this username-rotation scenario.
+
+After the change:
+  - All five failed attempts are counted against the same client IP.
+  - A subsequent request from that IP is rejected with HTTP 429, even if it
+    uses another username and a correct password.
+  - The customer login endpoint is also rejected while that IP is locked.
+  - After the 15-minute lock expires, login can be attempted again.
+
+HTTP status meanings in this test:
+  401 - The supplied login credentials are incorrect.
+  429 - The client IP is temporarily blocked because the failed-attempt limit
+        has been reached.
+  200 - Login succeeded after the lock expired.
+
+6. REFLECTION
+This change came from looking at the login feature from an attacker's point of
+view. At first, the application appeared to have brute-force protection because
+it stopped repeated failed attempts for one login identifier. However, that
+was not enough if someone could simply keep changing the username.
+
+I changed the counter to use the client's IP address and updated the tests to
+reproduce the username-rotation scenario. The main lesson for me was that a
+test should check not only whether a security feature works in the normal case,
+but also whether a realistic attempt to bypass it is blocked.
+
+7. LIMITATIONS AND DEPLOYMENT NOTES
+IP-based rate limiting is an additional protection layer, not a complete
+solution against every brute-force or denial-of-service attack.
+
+  - Several legitimate users behind the same office or home network may share
+    one public IP address. They can therefore affect the same counter.
+  - An attacker using many different IP addresses may distribute attempts
+    across those addresses.
+  - The application currently obtains the address from
+    self.client_address[0]. When deployed behind a reverse proxy, this may be
+    the proxy's address rather than the original client address. Proxy support
+    must be configured to trust only known proxies; blindly trusting a
+    client-supplied X-Forwarded-For header would be unsafe.
+  - The FAILED dictionary is in application memory. In a deployment with
+    multiple application processes or servers, a shared rate-limit store or
+    infrastructure-level protection may be needed for consistent limits.
+
+For production, this mechanism can be combined with account-level monitoring,
+trusted-proxy configuration, and rate limiting at the reverse proxy or WAF.
+
+8. SUMMARY OF MY CONTRIBUTION
+  - Identified that identifier-based failed-login counters could be bypassed
+    by rotating usernames.
+  - Updated app.py so staff and customer failed-login attempts are counted by
+    client IP address.
+  - Passed the connected client's IP address from the HTTP handler into both
+    login functions.
+  - Preserved the five-failed-attempt threshold and 15-minute lock duration.
+  - Updated test_security.py to test username rotation, shared staff/customer
+    IP restriction, and recovery after the lock expires.
+  - Ran the updated security test suite: all 4 tests passed.
+
+This evidence file documents the IP-based login rate-limiting change. It does
+not modify or replace any other project file.

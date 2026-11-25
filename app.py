@@ -18,11 +18,11 @@ SESSIONS = {}          # session id -> {"employee_id", "username", "role", "name
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")      # simple e-mail check (optional field)
 
 # ---------- security settings (Week 12) ----------
-MAX_FAILED_LOGINS = 5                    # the 5th wrong password locks the login name; the 6th attempt gets 429
+MAX_FAILED_LOGINS = 5                    # five failed attempts from one IP trigger a temporary lock
 LOCK_SECONDS = 15 * 60                   # how long the lock lasts
 SESSION_IDLE_SECONDS = 30 * 60           # a session with no request for 30 minutes expires (401)
 SHOP_CODE = os.environ.get("CRM_SHOP_CODE", "SHOP-2026")   # needed to register; set your own: CRM_SHOP_CODE=... python app.py
-FAILED = {}                              # login name -> {"count": wrong attempts in a row, "locked_until": time}
+FAILED = {}                              # client IP -> {"count": wrong attempts in a row, "locked_until": time}
 SEC_LOCK = threading.Lock()              # the server handles requests in threads, so the counters need a lock
 
 def _now():                              # one place for the clock, so the tests can move time forward
@@ -101,9 +101,9 @@ def init_db():
 
 
 # ---------- business functions ----------
-def login(data):
+def login(data, client_ip="unknown"):
     user, pw = str(data.get("username", "")), str(data.get("password", ""))
-    key = user.strip().lower()[:60]
+    key = client_ip
     with SEC_LOCK:                                    # locked? refuse before even looking at the password
         f = FAILED.get(key)
         if f and f["locked_until"]:
@@ -115,7 +115,7 @@ def login(data):
     row = db.execute("SELECT * FROM Employee WHERE username=?", (user,)).fetchone()
     db.close()
     if not row or not check_pw(pw, row["password_hash"]):
-        with SEC_LOCK:                                # unknown names are counted too, so nobody can tell which names exist
+        with SEC_LOCK:                                # failed attempts are counted by IP, regardless of the username
             f = FAILED.setdefault(key, {"count": 0, "locked_until": 0})
             f["count"] += 1
             if f["count"] >= MAX_FAILED_LOGINS:
@@ -268,11 +268,11 @@ def client_register(data):
         db.close()
     return _client_session(cid, name, phone)
 
-def client_login(data):
+def client_login(data, client_ip="unknown"):
     phone = normalize_phone(data.get("phone"))
     pw = str(data.get("password", ""))
-    key = "client:" + (phone or str(data.get("phone", ""))[:30])
-    with SEC_LOCK:                                    # same lock rule as staff: 5 wrong passwords lock for 15 minutes
+    key = client_ip
+    with SEC_LOCK:                                    # same IP-based lock rule as staff: five wrong passwords lock for 15 minutes
         f = FAILED.get(key)
         if f and f["locked_until"]:
             if f["locked_until"] > _now():
@@ -582,13 +582,13 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(BASE, "style.css"), "rb") as f: css = f.read()
                 return self._send(200, css, ctype="text/css; charset=utf-8")
             if method == "POST" and u.path == "/api/login":
-                sid, s = login(self._body())
+                sid, s = login(self._body(), self.client_address[0])
                 return self._send(200, {"username": s["username"], "role": s["role"], "name": s["name"]},
                                   {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
             if method == "POST" and u.path == "/api/register":
                 return self._send(201, register(self._body()))
             if method == "POST" and u.path in ("/api/client/register", "/api/client/login"):
-                sid, s = (client_register if u.path.endswith("register") else client_login)(self._body())
+                sid, s = (client_register(self._body()) if u.path.endswith("register") else client_login(self._body(), self.client_address[0]))
                 return self._send(201 if u.path.endswith("register") else 200, {"username": s["username"], "role": s["role"], "name": s["name"]},
                                   {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
             user = self._user()
