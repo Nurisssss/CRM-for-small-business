@@ -1,4 +1,4 @@
-"""Tests for client accounts (Almas, Week 13): sign up with e-mail, password check, login, the three roles.
+"""Tests for client accounts (Almas, Week 14): SMS verification on sign up, password check, login, the three roles.
 Run:  python test_client.py     (the clock is moved by the test, nobody waits 15 minutes)"""
 import json, os, tempfile, threading, time, unittest, urllib.request, urllib.error
 import app
@@ -24,67 +24,119 @@ class ClientTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls): cls.srv.shutdown()
     def setUp(self):
+        app.SMS_PROVIDER = "console"
         self.clock = [2_000_000.0]; app._now = lambda: self.clock[0]; app.FAILED.clear(); app.SESSIONS.clear()
+        app.SMS_CODES.clear(); app.SMS_LOG.clear()
         ClientTests.n = getattr(ClientTests, "n", 0) + 1
         app.DB_PATH = os.path.join(self.tmp, f"client{ClientTests.n}.db"); app.init_db()          # a fresh database for every test
     def tearDown(self): app._now = time.time
 
-    def signup(self, **over):
-        c = Api(self.base); s, j = c.call("POST", "/api/client/register", {**NEW, **over}); return c, s, j
+    def send_sms(self, phone=NEW["phone"]):
+        c = Api(self.base)
+        s, j = c.call("POST", "/api/client/send-sms", {"phone": phone})
+        return c, s, j
 
-    # --- sign up: e-mail, password check, phone check ---
-    def test_01_signup_creates_account_and_logs_in(self):
+    def signup(self, request_sms=True, **over):
+        data = {**NEW, **over}
+        c = Api(self.base)
+        if request_sms and "sms_code" not in over:
+            s_sms, j_sms = c.call("POST", "/api/client/send-sms", {"phone": data["phone"]})
+            if s_sms == 200:
+                data["sms_code"] = j_sms["demo_code"]
+        s, j = c.call("POST", "/api/client/register", data)
+        return c, s, j
+
+    # --- SMS verification + sign up: e-mail, password check, phone check ---
+    def test_01_signup_with_sms_creates_account_and_logs_in(self):
         c, s, j = self.signup(); self.assertEqual((s, j["role"]), (201, "Client"))
         s, me = c.call("GET", "/api/client/me"); self.assertEqual((s, me["phone"], me["email"], me["loyalty_points"]), (200, NEW["phone"], NEW["email"], 0))
+
     def test_02_email_required_and_checked(self):
         self.assertEqual(self.signup(email="")[1], 400); self.assertEqual(self.signup(email="not-an-email")[1], 400)
+
     def test_03_weak_password_refused(self):
         for pw in ("short1", "onlyletters", "12345678"): self.assertEqual(self.signup(password=pw)[1], 400)
+
     def test_04_bad_phone_and_name_refused(self):
         self.assertEqual(self.signup(phone="555-103")[1], 400); self.assertEqual(self.signup(full_name="A")[1], 400)
+
     def test_05_phone_written_in_other_style_is_accepted(self):
-        _, s, j = self.signup(phone="87011112233"); self.assertEqual(s, 201); self.assertEqual(Api(self.base).call("POST", "/api/client/login", {"phone": NEW["phone"], "password": NEW["password"]})[0], 200)
+        _, s, j = self.signup(phone="87011112233"); self.assertEqual(s, 201)
+        self.assertEqual(Api(self.base).call("POST", "/api/client/login", {"phone": NEW["phone"], "password": NEW["password"]})[0], 200)
+
     def test_06_failed_signup_saves_nothing(self):
         self.signup(password="weak"); db = app.connect(); n = db.execute("SELECT COUNT(*) FROM Customer WHERE phone=?", (NEW["phone"],)).fetchone()[0]; db.close(); self.assertEqual(n, 0)
+
     def test_07_duplicate_account_refused(self):
-        self.signup(); self.assertEqual(self.signup()[1], 409)
+        self.signup(); self.assertEqual(self.signup(request_sms=False, sms_code="123456")[1], 409)
+        _, s_sms, _ = self.send_sms(NEW["phone"]); self.assertEqual(s_sms, 409)
+
+    # --- SMS edge cases ---
+    def test_08_signup_without_sms_code_or_wrong_code_refused(self):
+        _, s1, _ = self.signup(request_sms=False, sms_code="")
+        self.assertEqual(s1, 400)
+        self.send_sms(NEW["phone"])
+        _, s2, j2 = self.signup(request_sms=False, sms_code="000000")
+        self.assertEqual(s2, 400); self.assertIn("Wrong SMS", j2["error"])
+
+    def test_09_expired_sms_code_refused(self):
+        _, s, j = self.send_sms(NEW["phone"]); self.assertEqual(s, 200)
+        self.clock[0] += app.SMS_TTL_SECONDS + 1
+        _, s2, j2 = self.signup(request_sms=False, sms_code=j["demo_code"])
+        self.assertEqual(s2, 400); self.assertIn("expired", j2["error"])
+
+    def test_10_sms_resend_cooldown_and_too_many_wrong_codes(self):
+        _, s1, j1 = self.send_sms(NEW["phone"]); self.assertEqual(s1, 200)
+        _, s2, _ = self.send_sms(NEW["phone"]); self.assertEqual(s2, 429)
+        for _ in range(app.SMS_MAX_ATTEMPTS - 1):
+            self.assertEqual(self.signup(request_sms=False, sms_code="999999")[1], 400)
+        self.assertEqual(self.signup(request_sms=False, sms_code="999999")[1], 429)
+        # Code invalidated after max wrong attempts
+        self.assertEqual(self.signup(request_sms=False, sms_code=j1["demo_code"])[1], 400)
 
     # --- phone already known by the shop: no takeover from the web page ---
-    def test_08_shop_customer_cannot_be_taken_over(self):
-        _, s, j = self.signup(phone="+7 700 000 01 02", password="hackerpass1")            # Dana Serik in data.sql, has points
+    def test_11_shop_customer_cannot_be_taken_over(self):
+        _, s_sms, j_sms = self.send_sms("+7 700 000 01 02")
+        self.assertEqual(s_sms, 409); self.assertIn("cashier", j_sms["error"])
+        _, s, j = self.signup(request_sms=False, sms_code="123456", phone="+7 700 000 01 02", password="hackerpass1")
         self.assertEqual(s, 409); self.assertIn("cashier", j["error"])
         self.assertEqual(Api(self.base).call("POST", "/api/client/login", {"phone": "+7 700 000 01 02", "password": "hackerpass1"})[0], 401)
-    def test_09_customer_made_by_employee_is_also_protected(self):
+
+    def test_12_customer_made_by_employee_is_also_protected(self):
         emp = Api(self.base); emp.call("POST", "/api/login", {"username": "aruzhan", "password": "cashier123"})
         self.assertEqual(emp.call("POST", "/api/customer", {"full_name": "Shop Made", "phone": "+7 702 222 33 44"})[0], 201)
-        self.assertEqual(self.signup(phone="+7 702 222 33 44")[1], 409)
+        self.assertEqual(self.send_sms("+7 702 222 33 44")[1], 409)
 
     # --- log in, lock, password ---
-    def test_10_client_login_ok_and_wrong_password(self):
+    def test_13_client_login_ok_and_wrong_password(self):
         self.signup(); c = Api(self.base)
         self.assertEqual(c.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": "wrongpass1"})[0], 401)
         self.assertEqual(c.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": NEW["password"]})[0], 200)
-    def test_11_client_login_locked_after_5_wrong_and_opens_later(self):
+
+    def test_14_client_login_locked_after_5_wrong_and_opens_later(self):
         self.signup(); c = Api(self.base)
         self.assertEqual([c.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": "wrongpass1"})[0] for _ in range(5)], [401] * 5)
         self.assertEqual(c.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": NEW["password"]})[0], 429)
         self.clock[0] += app.LOCK_SECONDS + 1
         self.assertEqual(c.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": NEW["password"]})[0], 200)
-    def test_12_client_changes_password(self):
+
+    def test_15_client_changes_password(self):
         c, _, _ = self.signup()
         self.assertEqual(c.call("POST", "/api/client/password", {"current_password": "WRONGpass1", "new_password": "newclient22"})[0], 403)
         self.assertEqual(c.call("POST", "/api/client/password", {"current_password": NEW["password"], "new_password": "weak"})[0], 400)
         self.assertEqual(c.call("POST", "/api/client/password", {"current_password": NEW["password"], "new_password": "newclient22"})[0], 200)
         d = Api(self.base); self.assertEqual(d.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": NEW["password"]})[0], 401)
         self.assertEqual(d.call("POST", "/api/client/login", {"phone": NEW["phone"], "password": "newclient22"})[0], 200)
-    def test_13_password_stored_hashed(self):
+
+    def test_16_password_stored_hashed(self):
         self.signup(); db = app.connect(); h = db.execute("SELECT password_hash FROM Customer WHERE phone=?", (NEW["phone"],)).fetchone()[0]; db.close()
         self.assertNotIn(NEW["password"], h); self.assertIn("$", h)
-    def test_14_shop_customer_without_account_cannot_log_in(self):
+
+    def test_17_shop_customer_without_account_cannot_log_in(self):
         self.assertEqual(Api(self.base).call("POST", "/api/client/login", {"phone": "+7 700 000 01 01", "password": "anything123"})[0], 401)
 
     # --- three roles: Employee, Manager, Client ---
-    def test_15_client_cannot_use_staff_routes(self):
+    def test_18_client_cannot_use_staff_routes(self):
         c, _, _ = self.signup()
         for method, path, body in [("GET", "/api/products", None), ("GET", "/api/customer?phone=%2B7%20700%20000%2001%2001", None),
                                    ("POST", "/api/purchase", {"customer_id": 1, "items": [{"product_id": 1, "quantity": 1}], "payment": "approved"}),
@@ -92,23 +144,29 @@ class ClientTests(unittest.TestCase):
                                    ("GET", "/api/report/top?month=2026-10", None), ("POST", "/api/password", {"current_password": "a", "new_password": "goodpass1"}),
                                    ("POST", "/api/admin/merge-customers", {"source_id": 1, "target_id": 2}), ("GET", "/api/points-log?customer_id=1", None)]:
             self.assertEqual(c.call(method, path, body)[0], 403, path)
-    def test_16_staff_cannot_open_client_page(self):
+
+    def test_19_staff_cannot_open_client_page(self):
         emp = Api(self.base); emp.call("POST", "/api/login", {"username": "aruzhan", "password": "cashier123"})
         self.assertNotEqual(emp.call("GET", "/api/client/me")[0], 200)
-    def test_17_client_page_needs_login(self):
+
+    def test_20_client_page_needs_login(self):
         self.assertEqual(Api(self.base).call("GET", "/api/client/me")[0], 401)
-    def test_18_names_of_the_two_login_kinds_do_not_mix(self):
+
+    def test_21_names_of_the_two_login_kinds_do_not_mix(self):
         self.signup(); c = Api(self.base)
         self.assertEqual(c.call("POST", "/api/login", {"username": NEW["phone"], "password": NEW["password"]})[0], 401)
         self.assertEqual(c.call("POST", "/api/client/login", {"phone": "aruzhan", "password": "cashier123"})[0], 401)
-    def test_19_no_password_hash_leaks(self):
+
+    def test_22_no_password_hash_leaks(self):
         self.signup(); mgr = Api(self.base); mgr.call("POST", "/api/login", {"username": "daniyar", "password": "manager123"})
         s, j = mgr.call("GET", "/api/customer?phone=%2B7%20701%20111%2022%2033"); self.assertNotIn("password_hash", json.dumps(j))
         db = app.connect(); ids = [r[0] for r in db.execute("SELECT customer_id FROM Customer ORDER BY 1 LIMIT 2")]; db.close()
         s, j = mgr.call("POST", "/api/admin/merge-customers", {"source_id": ids[0], "target_id": ids[1]}); self.assertEqual(s, 200); self.assertNotIn("password_hash", json.dumps(j))
-    def test_20_logout_closes_client_session(self):
+
+    def test_23_logout_closes_client_session(self):
         c, _, _ = self.signup(); self.assertEqual(c.call("POST", "/api/logout", {})[0], 200); self.assertEqual(c.call("GET", "/api/client/me")[0], 401)
-    def test_21_client_sees_own_points_history_only(self):
+
+    def test_24_client_sees_own_points_history_only(self):
         c, _, _ = self.signup(); s, hist = c.call("GET", "/api/client/points"); self.assertEqual((s, hist), (200, []))
 
 if __name__ == "__main__":

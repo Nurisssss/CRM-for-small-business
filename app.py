@@ -7,7 +7,8 @@ import hashlib, json, os, re, secrets, sqlite3, threading, time
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+import urllib.error, urllib.request
+from urllib.parse import urlparse, parse_qs, urlencode
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("CRM_DB", os.path.join(BASE, "crm.db"))
@@ -24,6 +25,18 @@ SESSION_IDLE_SECONDS = 30 * 60           # a session with no request for 30 minu
 SHOP_CODE = os.environ.get("CRM_SHOP_CODE", "SHOP-2026")   # needed to register; set your own: CRM_SHOP_CODE=... python app.py
 FAILED = {}                              # client IP -> {"count": wrong attempts in a row, "locked_until": time}
 SEC_LOCK = threading.Lock()              # the server handles requests in threads, so the counters need a lock
+# ---------- SMS verification for client registration (Almas) ----------
+SMS_TTL_SECONDS = 5 * 60                 # verification code is valid for 5 minutes
+SMS_RESEND_SECONDS = 30                  # minimum pause between resending codes to the same phone
+SMS_MAX_ATTEMPTS = 5                     # max wrong code entries before code invalidation
+SMS_PROVIDER = os.environ.get("CRM_SMS_PROVIDER", "mobizon").strip().lower()  # 'mobizon' | 'console' | 'twilio' | 'smsc'
+MOBIZON_DOMAIN = os.environ.get("MOBIZON_DOMAIN", "api.mobizon.kz").strip()
+MOBIZON_API_KEY = os.environ.get("MOBIZON_API_KEY", " ").strip()
+MOBIZON_SENDER = os.environ.get("MOBIZON_SENDER", "").strip()
+SMS_CODES = {}                           # normalized phone -> {"code", "expires_at", "sent_at", "attempts"}
+SMS_LOG = []                             # recent sent SMS records (for console/demo visibility & tests)
+SMS_LOCK = threading.Lock()
+
 
 def _now():                              # one place for the clock, so the tests can move time forward
     return time.time()
@@ -236,18 +249,162 @@ def create_customer(user, data):
     return find_customer(user, phone)
 
 # ---------- client accounts: sign up, log in, own page (Week 13) ----------
+def _dispatch_sms(phone, text):
+    """Sends an SMS via configured provider:
+    - 'mobizon' (default): uses MOBIZON_DOMAIN and MOBIZON_API_KEY
+    - 'twilio': uses TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM
+    - 'smsc': uses SMSC_LOGIN, SMSC_PASSWORD, SMSC_SENDER (popular in KZ/CIS)
+    - 'console': prints to server terminal and stores in SMS_LOG for local demo/testing."""
+    provider = os.environ.get("CRM_SMS_PROVIDER", SMS_PROVIDER).strip().lower()
+    digits = re.sub(r"\D", "", phone)
+    e164 = f"+{digits}"
+
+    if provider == "mobizon":
+        domain = os.environ.get("MOBIZON_DOMAIN", MOBIZON_DOMAIN).strip()
+        api_key = os.environ.get("MOBIZON_API_KEY", MOBIZON_API_KEY).strip()
+        sender = os.environ.get("MOBIZON_SENDER", MOBIZON_SENDER).strip()
+        if not (domain and api_key):
+            raise ApiError(500, "Mobizon SMS credentials are not configured")
+        params = {"recipient": digits, "text": text, "apiKey": api_key}
+        if sender:
+            params["from"] = sender
+        url = f"https://{domain}/service/message/sendsmsmessage"
+        data = urlencode(params).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw_body = resp.read().decode("utf-8", errors="ignore") or "{}"
+                body = json.loads(raw_body)
+                if body.get("code") != 0:
+                    err_msg = body.get("message") or f"Mobizon error code {body.get('code')}"
+                    raise ApiError(502, f"Mobizon error: {err_msg}")
+        except urllib.error.URLError as e:
+            raise ApiError(502, f"Failed to send SMS via Mobizon: {e}")
+        return "mobizon"
+
+    if provider == "twilio":
+        sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        sender = os.environ.get("TWILIO_FROM", "")
+        if not (sid and token and sender):
+            raise ApiError(500, "Twilio SMS credentials are not configured")
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+        data = urlencode({"To": e164, "From": sender, "Body": text}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        import base64
+        auth = base64.b64encode(f"{sid}:{token}".encode()).decode()
+        req.add_header("Authorization", f"Basic {auth}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status not in (200, 201):
+                    raise ApiError(502, "SMS gateway returned an error")
+        except urllib.error.URLError as e:
+            raise ApiError(502, f"Failed to send SMS via Twilio: {e}")
+        return "twilio"
+
+    if provider == "smsc":
+        login_v = os.environ.get("SMSC_LOGIN", "")
+        psw_v = os.environ.get("SMSC_PASSWORD", "")
+        sender = os.environ.get("SMSC_SENDER", "")
+        if not (login_v and psw_v):
+            raise ApiError(500, "SMSC.kz credentials are not configured")
+        params = {"login": login_v, "psw": psw_v, "phones": e164, "mes": text, "fmt": 3}
+        if sender:
+            params["sender"] = sender
+        url = "https://smsc.kz/sys/send.php?" + urlencode(params)
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
+                if "error" in body:
+                    raise ApiError(502, f"SMSC error: {body.get('error')}")
+        except urllib.error.URLError as e:
+            raise ApiError(502, f"Failed to send SMS via SMSC: {e}")
+        return "smsc"
+
+    # Default 'console' gateway (works offline without paid API keys; prints code to terminal)
+    print(f"[SMS -> {phone}] {text}")
+    return "console"
+
+def send_client_sms(data, client_ip="unknown"):
+    """Generates and sends a 6-digit SMS verification code for client registration."""
+    phone = normalize_phone(data.get("phone"))
+    if not phone:
+        raise ApiError(400, "Phone must look like +7 700 000 01 01")
+    db = connect()
+    try:
+        c = db.execute("SELECT password_hash FROM Customer WHERE phone=?", (phone,)).fetchone()
+        if c and c["password_hash"]:
+            raise ApiError(409, "This phone already has an account - please log in")
+        if c:
+            raise ApiError(409, "This phone is already in the shop's records - ask the cashier to open your account")
+    finally:
+        db.close()
+
+    now = _now()
+    with SMS_LOCK:
+        existing = SMS_CODES.get(phone)
+        if existing and (now - existing["sent_at"]) < SMS_RESEND_SECONDS:
+            wait = int(SMS_RESEND_SECONDS - (now - existing["sent_at"])) + 1
+            raise ApiError(429, f"Please wait {wait}s before requesting another SMS code")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        SMS_CODES[phone] = {
+            "code": code,
+            "expires_at": now + SMS_TTL_SECONDS,
+            "sent_at": now,
+            "attempts": 0,
+        }
+
+    msg = f"CRM Loyalty verification code: {code}. Valid for 5 minutes."
+    try:
+        mode = _dispatch_sms(phone, msg)
+    except Exception:
+        with SMS_LOCK:
+            SMS_CODES.pop(phone, None)
+        raise
+
+    with SMS_LOCK:
+        SMS_LOG.append({"phone": phone, "code": code, "sent_at": now, "provider": mode})
+        if len(SMS_LOG) > 50:
+            del SMS_LOG[:-50]
+
+    res = {"ok": True, "phone": phone, "expires_in": SMS_TTL_SECONDS, "provider": mode}
+    if mode == "console":
+        res["demo_code"] = code
+    return res
+
+def _verify_client_sms(phone, code_raw):
+    code = str(code_raw or "").strip()
+    if not re.fullmatch(r"\d{6}", code):
+        raise ApiError(400, "Enter the 6-digit SMS verification code")
+    now = _now()
+    with SMS_LOCK:
+        entry = SMS_CODES.get(phone)
+        if not entry:
+            raise ApiError(400, "Request an SMS verification code first")
+        if entry["expires_at"] < now:
+            SMS_CODES.pop(phone, None)
+            raise ApiError(400, "SMS code has expired - request a new one")
+        if not secrets.compare_digest(entry["code"], code):
+            entry["attempts"] += 1
+            if entry["attempts"] >= SMS_MAX_ATTEMPTS:
+                SMS_CODES.pop(phone, None)
+                raise ApiError(429, "Too many wrong SMS codes - request a new code")
+            raise ApiError(400, "Wrong SMS verification code")
+        SMS_CODES.pop(phone, None)
+
 def _client_session(customer_id, name, phone):
     sid = secrets.token_urlsafe(24)
     SESSIONS[sid] = {"customer_id": customer_id, "username": phone, "role": "Client", "name": name, "last_seen": _now()}
     return sid, SESSIONS[sid]
 
 def client_register(data):
-    """A new client signs up alone: full name, phone, e-mail (required) and a checked password. He is logged in at once.
-    A phone that the shop already has in Customer cannot be taken over from the web page (there is no proof that the phone is his)."""
+    """A new client signs up alone: full name, phone, SMS verification code, e-mail (required) and a checked password.
+    He is logged in at once after verifying the SMS code."""
     name = str(data.get("full_name") or "").strip()
     phone = normalize_phone(data.get("phone"))
     email = str(data.get("email") or "").strip()
     password = data.get("password", "")
+    sms_code = data.get("sms_code", "")
     if not (2 <= len(name) <= 80): raise ApiError(400, "Full name must be 2-80 characters")
     if not phone: raise ApiError(400, "Phone must look like +7 700 000 01 01")
     if not email or len(email) > 100 or not EMAIL_RE.match(email): raise ApiError(400, "A valid e-mail is required")
@@ -259,6 +416,7 @@ def client_register(data):
             raise ApiError(409, "This phone already has an account - please log in")
         if c:
             raise ApiError(409, "This phone is already in the shop's records - ask the cashier to open your account")
+        _verify_client_sms(phone, sms_code)
         try:
             cid = db.execute("INSERT INTO Customer (full_name, phone, email, loyalty_points, last_updated, password_hash) VALUES (?,?,?,0,?,?)",
                              (name, phone, email, datetime.now().strftime("%Y-%m-%d"), hash_pw(password))).lastrowid
@@ -540,7 +698,7 @@ def merge_customers(user, data):
 
 
 # ---------- HTTP ----------
-CLIENT_ROUTES = {("POST", "/api/logout"), ("GET", "/api/me"), ("GET", "/api/client/me"), ("GET", "/api/client/points"), ("POST", "/api/client/password")}
+CLIENT_ROUTES = {("POST", "/api/logout"), ("GET", "/api/me"), ("GET", "/api/client/me"), ("GET", "/api/client/points"), ("POST", "/api/client/password"), ("GET", "/api/rules")}
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -587,6 +745,8 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
             if method == "POST" and u.path == "/api/register":
                 return self._send(201, register(self._body()))
+            if method == "POST" and u.path == "/api/client/send-sms":
+                return self._send(200, send_client_sms(self._body(), self.client_address[0]))
             if method == "POST" and u.path in ("/api/client/register", "/api/client/login"):
                 sid, s = (client_register(self._body()) if u.path.endswith("register") else client_login(self._body(), self.client_address[0]))
                 return self._send(201 if u.path.endswith("register") else 200, {"username": s["username"], "role": s["role"], "name": s["name"]},
