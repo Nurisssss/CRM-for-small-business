@@ -1,9 +1,12 @@
+
 """CRM for Small Business - prototype (Week 13).
 Only the Python standard library is used. Run:  python app.py   then open http://localhost:8000
 Main process: employee logs in -> finds customer by phone -> adds products (optionally pays part of the bill with bonus points)
 -> card terminal result -> purchase saved in ONE transaction (stock, bonus points and the points ledger updated, or everything rolled back).
 """
 import hashlib, json, os, re, secrets, sqlite3, threading, time
+
+import hashlib, json, os, re, secrets, sqlite3
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,11 +34,12 @@ SMS_RESEND_SECONDS = 30                  # minimum pause between resending codes
 SMS_MAX_ATTEMPTS = 5                     # max wrong code entries before code invalidation
 SMS_PROVIDER = os.environ.get("CRM_SMS_PROVIDER", "mobizon").strip().lower()  # 'mobizon' | 'console' | 'twilio' | 'smsc'
 MOBIZON_DOMAIN = os.environ.get("MOBIZON_DOMAIN", "api.mobizon.kz").strip()
-MOBIZON_API_KEY = os.environ.get("MOBIZON_API_KEY", " ").strip()
+MOBIZON_API_KEY = os.environ.get("MOBIZON_API_KEY", "").strip()
 MOBIZON_SENDER = os.environ.get("MOBIZON_SENDER", "").strip()
 SMS_CODES = {}                           # normalized phone -> {"code", "expires_at", "sent_at", "attempts"}
 SMS_LOG = []                             # recent sent SMS records (for console/demo visibility & tests)
 SMS_LOCK = threading.Lock()
+
 
 
 def _now():                              # one place for the clock, so the tests can move time forward
@@ -47,14 +51,19 @@ POINTS_RATE = Decimal("0.03")            # cashback: 3 % of the money PAID IN MO
 POINT_VALUE = Decimal("0.01")            # 1 point is worth $0.01 when spent (100 points = $1)
 MAX_REDEEM_SHARE = Decimal("0.30")       # points may pay at most 30 % of one bill
 MAX_EARN_PER_PURCHASE = 5000             # safety cap: one purchase never earns more than 5000 points (= $50)
+# ---------- discount rules ----------
+MIN_DISCOUNT_ORDER = Decimal("5000.00")
 
+DISCOUNT_BONUS_SHARE = Decimal("0.30")
+
+LOYALTY_DISCOUNT_RATE = Decimal("0.10")
 
 class ApiError(Exception):
     def __init__(self, status, message):
         super().__init__(message); self.status, self.message = status, message
 
 
-# ---------- passwords (never stored in clear text) ----------
+#passwords (never stored in clear text)
 def hash_pw(password, salt=None):
     salt = salt or secrets.token_hex(8)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
@@ -65,9 +74,9 @@ def check_pw(password, stored):
     return secrets.compare_digest(hash_pw(password, salt), stored)
 
 
-# ---------- database ----------
+#database
 def connect():
-    db = sqlite3.connect(DB_PATH, isolation_level=None)      # we control BEGIN / COMMIT / ROLLBACK ourselves
+    db = sqlite3.connect(DB_PATH, isolation_level=None)
     db.execute("PRAGMA foreign_keys = ON")
     db.row_factory = sqlite3.Row
     return db
@@ -98,6 +107,20 @@ def ensure_client_support():
         db.execute("ALTER TABLE Customer ADD COLUMN password_hash VARCHAR(255)")
     db.close()
 
+
+def ensure_purchase_discount():
+    """Add discount_amount to existing Purchase tables without deleting old data."""
+    db = connect()
+    try:
+        columns = [row["name"] for row in db.execute("PRAGMA table_info(Purchase)")]
+        if "discount_amount" not in columns:
+            db.execute(
+                "ALTER TABLE Purchase ADD COLUMN discount_amount "
+                "DECIMAL(10,2) NOT NULL DEFAULT 0"
+            )
+    finally:
+        db.close()
+
 def init_db():
     if not os.path.exists(DB_PATH):
         db = connect()
@@ -111,8 +134,11 @@ def init_db():
         db.close()
     ensure_points_log()
     ensure_client_support()
+    ensure_purchase_discount()
 
 
+
+# ---------- business functions ----------
 # ---------- business functions ----------
 def login(data, client_ip="unknown"):
     user, pw = str(data.get("username", "")), str(data.get("password", ""))
@@ -486,89 +512,265 @@ def list_products():
     rows = [dict(r) for r in db.execute("SELECT product_id, product_name, price, stock_qty FROM Product ORDER BY product_id")]
     db.close(); return rows
 
+def calculate_discount(total, loyalty_points):
+    """
+    Apply a 10% discount when:
+    1. Order total is at least $5,000.
+    2. Customer's bonus value is MORE than 30%
+       of the order total.
+
+    Bonus points are not spent by this discount.
+    """
+
+    total = Decimal(str(total))
+    bonus_value = Decimal(loyalty_points) * POINT_VALUE
+
+    if (
+        total >= MIN_DISCOUNT_ORDER
+        and bonus_value > total * DISCOUNT_BONUS_SHARE
+    ):
+        discount = total * LOYALTY_DISCOUNT_RATE
+
+        return discount.quantize(
+            Decimal("0.01"),
+            rounding=ROUND_DOWN
+        )
+
+    return Decimal("0.00")
+
+
 def whole(amount):
-    """Cut an amount down to a whole number (no rounding up, so the shop never gives more than the rule says)."""
-    return int(Decimal(amount).to_integral_value(rounding=ROUND_DOWN))
+    """
+    Cut an amount down to a whole number.
+    """
+    return int(
+        Decimal(amount).to_integral_value(
+            rounding=ROUND_DOWN
+        )
+    )
 
 def points_rules():
-    return {"points_rate": str(POINTS_RATE), "point_value": str(POINT_VALUE),
-            "max_redeem_share": str(MAX_REDEEM_SHARE), "max_earn_per_purchase": MAX_EARN_PER_PURCHASE}
+    return {
+        "points_rate": str(POINTS_RATE),
+        "point_value": str(POINT_VALUE),
+        "max_redeem_share": str(MAX_REDEEM_SHARE),
+        "max_earn_per_purchase": MAX_EARN_PER_PURCHASE,
+        "min_discount_order": str(MIN_DISCOUNT_ORDER),
+        "discount_bonus_share": str(DISCOUNT_BONUS_SHARE),
+        "discount_rate": str(LOYALTY_DISCOUNT_RATE),
+    }
+
 
 def record_purchase(user, data):
+    """Record a purchase atomically, including eligible loyalty discount."""
     try:
         customer_id = int(data.get("customer_id"))
         raw = data.get("items")
         pay = data.get("payment")
-        if not isinstance(raw, list) or not raw: raise ValueError
+        if not isinstance(raw, list) or not raw:
+            raise ValueError
+
         items = {}
-        for it in raw:
-            pid, qty = int(it["product_id"]), int(it["quantity"])
-            if not (1 <= qty <= 100): raise ValueError
-            items[pid] = items.get(pid, 0) + qty          # same product twice -> one line
+        for item in raw:
+            product_id = int(item["product_id"])
+            quantity = int(item["quantity"])
+            if not (1 <= quantity <= 100):
+                raise ValueError
+            items[product_id] = items.get(product_id, 0) + quantity
     except (TypeError, ValueError, KeyError):
-        raise ApiError(400, "Send customer_id and a list of items with product_id and quantity (1-100)")
+        raise ApiError(
+            400,
+            "Send customer_id and a list of items with product_id and quantity (1-100)"
+        )
+
     if pay not in ("approved", "declined"):
         raise ApiError(400, "payment must be 'approved' or 'declined'")
-    raw_pts = data.get("points_to_use", 0)
-    if raw_pts is None: raw_pts = 0
+
+    raw_points = data.get("points_to_use", 0)
+    if raw_points is None:
+        raw_points = 0
     try:
-        if isinstance(raw_pts, bool) or not isinstance(raw_pts, (int, str)): raise ValueError
-        points_use = int(raw_pts)
-        if points_use < 0: raise ValueError
-    except ValueError:
+        if isinstance(raw_points, bool) or not isinstance(raw_points, (int, str)):
+            raise ValueError
+        points_use = int(raw_points)
+        if points_use < 0:
+            raise ValueError
+    except (TypeError, ValueError):
         raise ApiError(400, "points_to_use must be a whole number, 0 or more")
 
     db = connect()
     try:
         db.execute("BEGIN")
-        if not db.execute("SELECT 1 FROM Customer WHERE customer_id=?", (customer_id,)).fetchone():
+
+        customer = db.execute(
+            "SELECT loyalty_points FROM Customer WHERE customer_id=?",
+            (customer_id,)
+        ).fetchone()
+
+        if not customer:
             raise ApiError(404, "Customer not found")
-        lines, total = [], Decimal("0")
-        for pid, qty in items.items():                    # prices come from the database, never from the browser
-            p = db.execute("SELECT product_name, price FROM Product WHERE product_id=?", (pid,)).fetchone()
-            if not p: raise ApiError(404, f"Product {pid} not found")
-            price = Decimal(str(p["price"])); total += price * qty
-            lines.append((pid, qty, price, p["product_name"]))
-        max_by_share = whole(total * MAX_REDEEM_SHARE / POINT_VALUE)
-        if points_use > max_by_share:                     # rule: points pay at most MAX_REDEEM_SHARE of the bill
-            raise ApiError(400, f"Points can pay at most {int(MAX_REDEEM_SHARE * 100)}% of the bill (max {max_by_share} points for this purchase)")
-        to_pay = total - POINT_VALUE * points_use         # the part of the bill paid in money
-        ref = "TX" + secrets.token_hex(4).upper()
+
+        lines = []
+        total = Decimal("0.00")
+
+        # Prices are read from the database, never trusted from the browser.
+        for product_id, quantity in items.items():
+            product = db.execute(
+                "SELECT product_name, price FROM Product WHERE product_id=?",
+                (product_id,)
+            ).fetchone()
+
+            if not product:
+                raise ApiError(404, f"Product {product_id} not found")
+
+            price = Decimal(str(product["price"]))
+            total += price * quantity
+            lines.append((product_id, quantity, price, product["product_name"]))
+
+        # Apply the promotional discount before bonus-point redemption.
+        discount = calculate_discount(total, customer["loyalty_points"])
+        discounted_total = total - discount
+
+        # Existing rule: bonus points can cover at most 30% of the discounted bill.
+        max_by_share = whole(
+            discounted_total * MAX_REDEEM_SHARE / POINT_VALUE
+        )
+
+        if points_use > max_by_share:
+            raise ApiError(
+                400,
+                f"Points can pay at most {int(MAX_REDEEM_SHARE * 100)}% "
+                f"of the discounted bill (max {max_by_share} points)"
+            )
+
+        to_pay = discounted_total - POINT_VALUE * points_use
+
+        payment_ref = "TX" + secrets.token_hex(4).upper()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # step 1: save Purchase
-        cur = db.execute("INSERT INTO Purchase (customer_id, employee_id, purchase_date, total_amount, payment_status, payment_ref) VALUES (?,?,?,?,?,?)",
-                         (customer_id, user["employee_id"], now, float(total), "approved", ref))
-        pid_new = cur.lastrowid
-        # step 2: save the item lines
-        for pid, qty, price, _ in lines:
-            db.execute("INSERT INTO Purchase_Item VALUES (?,?,?,?)", (pid_new, pid, qty, float(price)))
-        # step 3: reduce stock (fails when there is not enough)
-        for pid, qty, _, name in lines:
-            if db.execute("UPDATE Product SET stock_qty = stock_qty - ? WHERE product_id=? AND stock_qty >= ?", (qty, pid, qty)).rowcount == 0:
-                raise ApiError(409, f"Not enough stock for {name}")
-        # step 4: spend bonus points (atomic: the UPDATE only works when the customer has enough points)
+
+        # Save the original merchandise total and the discount separately.
+        purchase_cursor = db.execute(
+            """
+            INSERT INTO Purchase (
+                customer_id, employee_id, purchase_date, total_amount,
+                payment_status, payment_ref, discount_amount
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                customer_id,
+                user["employee_id"],
+                now,
+                float(total),
+                "approved",
+                payment_ref,
+                float(discount),
+            )
+        )
+        purchase_id = purchase_cursor.lastrowid
+
+        # Save purchase item lines.
+        for product_id, quantity, price, _name in lines:
+            db.execute(
+                "INSERT INTO Purchase_Item VALUES (?,?,?,?)",
+                (purchase_id, product_id, quantity, float(price))
+            )
+
+        # Reduce stock; fail and roll back if stock is insufficient.
+        for product_id, quantity, _price, product_name in lines:
+            updated = db.execute(
+                """
+                UPDATE Product
+                SET stock_qty = stock_qty - ?
+                WHERE product_id=? AND stock_qty >= ?
+                """,
+                (quantity, product_id, quantity)
+            )
+            if updated.rowcount == 0:
+                raise ApiError(409, f"Not enough stock for {product_name}")
+
+        # Spend bonus points, if requested.
         if points_use:
-            if db.execute("UPDATE Customer SET loyalty_points = loyalty_points - ? WHERE customer_id=? AND loyalty_points >= ?",
-                          (points_use, customer_id, points_use)).rowcount == 0:
+            updated = db.execute(
+                """
+                UPDATE Customer
+                SET loyalty_points = loyalty_points - ?
+                WHERE customer_id=? AND loyalty_points >= ?
+                """,
+                (points_use, customer_id, points_use)
+            )
+            if updated.rowcount == 0:
                 raise ApiError(409, "Not enough bonus points")
-            db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) VALUES (?,?,?,?,?)",
-                       (customer_id, pid_new, -points_use, "spent", now))
-        # step 5: payment result from the (simulated) card terminal - on "declined" the rollback also gives the points back
+
+            db.execute(
+                """
+                INSERT INTO Points_Log
+                    (customer_id, purchase_id, points_change, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (customer_id, purchase_id, -points_use, "spent", now)
+            )
+
+        # Simulated card terminal. A declined payment rolls back all changes.
         if pay == "declined":
             raise ApiError(402, "Payment declined - nothing was saved")
-        # step 6: earn points on the money actually paid (not on the part paid with points)
-        earned = min(MAX_EARN_PER_PURCHASE, whole(to_pay * POINTS_RATE / POINT_VALUE))
-        db.execute("UPDATE Customer SET loyalty_points = loyalty_points + ?, last_updated = ? WHERE customer_id=?", (earned, now[:10], customer_id))
+
+        # Cashback is earned only on the amount actually paid in money.
+        earned = min(
+            MAX_EARN_PER_PURCHASE,
+            whole(to_pay * POINTS_RATE / POINT_VALUE)
+        )
+
+        db.execute(
+            """
+            UPDATE Customer
+            SET loyalty_points = loyalty_points + ?, last_updated=?
+            WHERE customer_id=?
+            """,
+            (earned, now[:10], customer_id)
+        )
+
         if earned:
-            db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) VALUES (?,?,?,?,?)",
-                       (customer_id, pid_new, earned, "earned", now))
+            db.execute(
+                """
+                INSERT INTO Points_Log
+                    (customer_id, purchase_id, points_change, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (customer_id, purchase_id, earned, "earned", now)
+            )
+
         db.execute("COMMIT")
-        points = db.execute("SELECT loyalty_points FROM Customer WHERE customer_id=?", (customer_id,)).fetchone()[0]
-        return {"purchase_id": pid_new, "payment_ref": ref, "total": float(total), "points_used": points_use, "amount_to_pay": float(to_pay),
-                "points_earned": earned, "loyalty_points": points,
-                "lines": [{"product": n, "quantity": q, "unit_price": float(p)} for _, q, p, n in lines]}
+
+        points_row = db.execute(
+            "SELECT loyalty_points FROM Customer WHERE customer_id=?",
+            (customer_id,)
+        ).fetchone()
+
+        return {
+            "purchase_id": purchase_id,
+            "payment_ref": payment_ref,
+            "total": float(total),
+            "discount_amount": float(discount),
+            "discount_percent": float(LOYALTY_DISCOUNT_RATE * 100 if discount else 0),
+            "total_after_discount": float(discounted_total),
+            "points_used": points_use,
+            "amount_to_pay": float(to_pay),
+            "points_earned": earned,
+            "loyalty_points": points_row["loyalty_points"],
+            "lines": [
+                {
+                    "product": name,
+                    "quantity": quantity,
+                    "unit_price": float(price),
+                }
+                for _product_id, quantity, price, name in lines
+            ],
+        }
+
     except Exception:
-        db.execute("ROLLBACK")                            # undo every step if anything failed
+        if db.in_transaction:
+            db.execute("ROLLBACK")
         raise
     finally:
         db.close()
@@ -597,7 +799,7 @@ def report_top(user, month):
     start, end = f"{y:04d}-{m:02d}-01", (f"{y+1:04d}-01-01" if m == 12 else f"{y:04d}-{m+1:02d}-01")
     db = connect()
     rows = [dict(r) for r in db.execute(
-        """SELECT c.customer_id, c.full_name, c.phone, COUNT(p.purchase_id) AS visits, SUM(p.total_amount) AS total_spent
+        """SELECT c.customer_id, c.full_name, c.phone, COUNT(p.purchase_id) AS visits, SUM(p.total_amount - COALESCE(p.discount_amount, 0)) AS total_spent
            FROM Customer c JOIN Purchase p ON p.customer_id = c.customer_id
            WHERE p.payment_status='approved' AND p.purchase_date >= ? AND p.purchase_date < ?
            GROUP BY c.customer_id, c.full_name, c.phone ORDER BY total_spent DESC LIMIT 3""", (start, end))]
@@ -697,8 +899,12 @@ def merge_customers(user, data):
         db.close()
 
 
+
 # ---------- HTTP ----------
 CLIENT_ROUTES = {("POST", "/api/logout"), ("GET", "/api/me"), ("GET", "/api/client/me"), ("GET", "/api/client/points"), ("POST", "/api/client/password"), ("GET", "/api/rules")}
+
+
+#HTTP
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
