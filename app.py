@@ -4,10 +4,13 @@ Main process: employee logs in -> finds customer by phone -> adds products (opti
 -> card terminal result -> purchase saved in ONE transaction (stock, bonus points and the points ledger updated, or everything rolled back).
 """
 import hashlib, json, os, re, secrets, sqlite3, threading, time
+
+import hashlib, json, os, re, secrets, sqlite3
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+import urllib.error, urllib.request
+from urllib.parse import urlparse, parse_qs, urlencode
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("CRM_DB", os.path.join(BASE, "crm.db"))
@@ -22,11 +25,39 @@ MAX_FAILED_LOGINS = 5                    # five failed attempts from one IP trig
 LOCK_SECONDS = 15 * 60                   # how long the lock lasts
 SESSION_IDLE_SECONDS = 30 * 60           # a session with no request for 30 minutes expires (401)
 SHOP_CODE = os.environ.get("CRM_SHOP_CODE", "SHOP-2026")   # needed to register; set your own: CRM_SHOP_CODE=... python app.py
-FAILED = {}                              # client IP -> {"count": wrong attempts in a row, "locked_until": time}
+MAX_FAILED_SHOP_CODES = 5                # five wrong shop codes from one IP lock the registration page for LOCK_SECONDS
+FAILED = {}                              # client IP -> {"count": wrong attempts in a row, "locked_until": time}  (key "shopcode:IP" = shop code guesses)
 SEC_LOCK = threading.Lock()              # the server handles requests in threads, so the counters need a lock
+# ---------- SMS verification for client registration (Almas) ----------
+SMS_TTL_SECONDS = 5 * 60                 # verification code is valid for 5 minutes
+SMS_RESEND_SECONDS = 30                  # minimum pause between resending codes to the same phone
+SMS_MAX_ATTEMPTS = 5                     # max wrong code entries before code invalidation
+SMS_PROVIDER = os.environ.get("CRM_SMS_PROVIDER", "mobizon").strip().lower()  # 'mobizon' | 'console' | 'twilio' | 'smsc'
+MOBIZON_DOMAIN = os.environ.get("MOBIZON_DOMAIN", "api.mobizon.kz").strip()
+MOBIZON_API_KEY = os.environ.get("MOBIZON_API_KEY", "").strip()
+MOBIZON_SENDER = os.environ.get("MOBIZON_SENDER", "").strip()
+SMS_CODES = {}                           # normalized phone -> {"code", "expires_at", "sent_at", "attempts"}
+SMS_LOG = []                             # recent sent SMS records (for console/demo visibility & tests)
+SMS_LOCK = threading.Lock()
+
+
 
 def _now():                              # one place for the clock, so the tests can move time forward
     return time.time()
+
+def _same_account(a, b):
+    """True when two sessions belong to the same person: the same employee, or the same client (customer)."""
+    if "Client" in (a["role"], b["role"]):
+        return a["role"] == b["role"] and a.get("customer_id") == b.get("customer_id")
+    return a.get("employee_id") == b.get("employee_id")
+
+def cancel_other_sessions(user):
+    """After a password change: every OTHER login of the same account is closed, so a stolen or forgotten session stops working.
+    `user` is the current session object; it stays. Returns how many sessions were closed."""
+    with SEC_LOCK:
+        others = [sid for sid, s in list(SESSIONS.items()) if s is not user and _same_account(s, user)]
+        for sid in others: del SESSIONS[sid]
+    return len(others)
 
 # ---------- loyalty points rules (change the numbers here; everything else uses these constants) ----------
 # All money is in US dollars ($). Points are small on purpose: 1 point = 1 cent, so a normal purchase earns a visible number of points.
@@ -34,14 +65,19 @@ POINTS_RATE = Decimal("0.03")            # cashback: 3 % of the money PAID IN MO
 POINT_VALUE = Decimal("0.01")            # 1 point is worth $0.01 when spent (100 points = $1)
 MAX_REDEEM_SHARE = Decimal("0.30")       # points may pay at most 30 % of one bill
 MAX_EARN_PER_PURCHASE = 5000             # safety cap: one purchase never earns more than 5000 points (= $50)
+# ---------- discount rules ----------
+MIN_DISCOUNT_ORDER = Decimal("5000.00")
 
+DISCOUNT_BONUS_SHARE = Decimal("0.30")
+
+LOYALTY_DISCOUNT_RATE = Decimal("0.10")
 
 class ApiError(Exception):
     def __init__(self, status, message):
         super().__init__(message); self.status, self.message = status, message
 
 
-# ---------- passwords (never stored in clear text) ----------
+#passwords (never stored in clear text)
 def hash_pw(password, salt=None):
     salt = salt or secrets.token_hex(8)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
@@ -52,9 +88,9 @@ def check_pw(password, stored):
     return secrets.compare_digest(hash_pw(password, salt), stored)
 
 
-# ---------- database ----------
+#database
 def connect():
-    db = sqlite3.connect(DB_PATH, isolation_level=None)      # we control BEGIN / COMMIT / ROLLBACK ourselves
+    db = sqlite3.connect(DB_PATH, isolation_level=None)
     db.execute("PRAGMA foreign_keys = ON")
     db.row_factory = sqlite3.Row
     return db
@@ -85,6 +121,20 @@ def ensure_client_support():
         db.execute("ALTER TABLE Customer ADD COLUMN password_hash VARCHAR(255)")
     db.close()
 
+
+def ensure_purchase_discount():
+    """Add discount_amount to existing Purchase tables without deleting old data."""
+    db = connect()
+    try:
+        columns = [row["name"] for row in db.execute("PRAGMA table_info(Purchase)")]
+        if "discount_amount" not in columns:
+            db.execute(
+                "ALTER TABLE Purchase ADD COLUMN discount_amount "
+                "DECIMAL(10,2) NOT NULL DEFAULT 0"
+            )
+    finally:
+        db.close()
+
 def init_db():
     if not os.path.exists(DB_PATH):
         db = connect()
@@ -98,8 +148,11 @@ def init_db():
         db.close()
     ensure_points_log()
     ensure_client_support()
+    ensure_purchase_discount()
 
 
+
+# ---------- business functions ----------
 # ---------- business functions ----------
 def login(data, client_ip="unknown"):
     user, pw = str(data.get("username", "")), str(data.get("password", ""))
@@ -155,10 +208,25 @@ def add_user(data, role):
     finally:
         db.close()
 
-def register(data):                                   # public page, but the shop code is required (Manager can also use /api/users)
+def register(data, client_ip="unknown"):              # public page, but the shop code is required (Manager can also use /api/users)
+    key = "shopcode:" + client_ip                     # its own counter: wrong shop codes do not lock the normal login
+    with SEC_LOCK:                                    # locked? refuse before even looking at the code
+        f = FAILED.get(key)
+        if f and f["locked_until"]:
+            if f["locked_until"] > _now():
+                minutes = int((f["locked_until"] - _now()) // 60) + 1
+                raise ApiError(429, f"Too many wrong shop codes. Try again in {minutes} minute(s)")
+            del FAILED[key]                           # the lock is over: start counting again
     code = str(data.get("shop_code", ""))
     if not secrets.compare_digest(code.encode(), SHOP_CODE.encode()):
+        with SEC_LOCK:
+            f = FAILED.setdefault(key, {"count": 0, "locked_until": 0})
+            f["count"] += 1
+            if f["count"] >= MAX_FAILED_SHOP_CODES:
+                f["locked_until"] = _now() + LOCK_SECONDS
         raise ApiError(403, "Wrong or missing shop code - ask your manager")
+    with SEC_LOCK:
+        FAILED.pop(key, None)                         # the right code clears the counter
     return add_user(data, "Employee")
 
 def create_user(user, data):                          # Manager only: choose the role
@@ -183,6 +251,7 @@ def change_password(user, data):
         if not row or not check_pw(str(old), row["password_hash"]):
             raise ApiError(403, "Current password is wrong")
         db.execute("UPDATE Employee SET password_hash=? WHERE employee_id=?", (hash_pw(new), user["employee_id"]))
+        cancel_other_sessions(user)                   # every other login of this employee is closed; this one stays
         return {"ok": True}
     finally:
         db.close()
@@ -236,18 +305,162 @@ def create_customer(user, data):
     return find_customer(user, phone)
 
 # ---------- client accounts: sign up, log in, own page (Week 13) ----------
+def _dispatch_sms(phone, text):
+    """Sends an SMS via configured provider:
+    - 'mobizon' (default): uses MOBIZON_DOMAIN and MOBIZON_API_KEY
+    - 'twilio': uses TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM
+    - 'smsc': uses SMSC_LOGIN, SMSC_PASSWORD, SMSC_SENDER (popular in KZ/CIS)
+    - 'console': prints to server terminal and stores in SMS_LOG for local demo/testing."""
+    provider = os.environ.get("CRM_SMS_PROVIDER", SMS_PROVIDER).strip().lower()
+    digits = re.sub(r"\D", "", phone)
+    e164 = f"+{digits}"
+
+    if provider == "mobizon":
+        domain = os.environ.get("MOBIZON_DOMAIN", MOBIZON_DOMAIN).strip()
+        api_key = os.environ.get("MOBIZON_API_KEY", MOBIZON_API_KEY).strip()
+        sender = os.environ.get("MOBIZON_SENDER", MOBIZON_SENDER).strip()
+        if not (domain and api_key):
+            raise ApiError(500, "Mobizon SMS credentials are not configured")
+        params = {"recipient": digits, "text": text, "apiKey": api_key}
+        if sender:
+            params["from"] = sender
+        url = f"https://{domain}/service/message/sendsmsmessage"
+        data = urlencode(params).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw_body = resp.read().decode("utf-8", errors="ignore") or "{}"
+                body = json.loads(raw_body)
+                if body.get("code") != 0:
+                    err_msg = body.get("message") or f"Mobizon error code {body.get('code')}"
+                    raise ApiError(502, f"Mobizon error: {err_msg}")
+        except urllib.error.URLError as e:
+            raise ApiError(502, f"Failed to send SMS via Mobizon: {e}")
+        return "mobizon"
+
+    if provider == "twilio":
+        sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        sender = os.environ.get("TWILIO_FROM", "")
+        if not (sid and token and sender):
+            raise ApiError(500, "Twilio SMS credentials are not configured")
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+        data = urlencode({"To": e164, "From": sender, "Body": text}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        import base64
+        auth = base64.b64encode(f"{sid}:{token}".encode()).decode()
+        req.add_header("Authorization", f"Basic {auth}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status not in (200, 201):
+                    raise ApiError(502, "SMS gateway returned an error")
+        except urllib.error.URLError as e:
+            raise ApiError(502, f"Failed to send SMS via Twilio: {e}")
+        return "twilio"
+
+    if provider == "smsc":
+        login_v = os.environ.get("SMSC_LOGIN", "")
+        psw_v = os.environ.get("SMSC_PASSWORD", "")
+        sender = os.environ.get("SMSC_SENDER", "")
+        if not (login_v and psw_v):
+            raise ApiError(500, "SMSC.kz credentials are not configured")
+        params = {"login": login_v, "psw": psw_v, "phones": e164, "mes": text, "fmt": 3}
+        if sender:
+            params["sender"] = sender
+        url = "https://smsc.kz/sys/send.php?" + urlencode(params)
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
+                if "error" in body:
+                    raise ApiError(502, f"SMSC error: {body.get('error')}")
+        except urllib.error.URLError as e:
+            raise ApiError(502, f"Failed to send SMS via SMSC: {e}")
+        return "smsc"
+
+    # Default 'console' gateway (works offline without paid API keys; prints code to terminal)
+    print(f"[SMS -> {phone}] {text}")
+    return "console"
+
+def send_client_sms(data, client_ip="unknown"):
+    """Generates and sends a 6-digit SMS verification code for client registration."""
+    phone = normalize_phone(data.get("phone"))
+    if not phone:
+        raise ApiError(400, "Phone must look like +7 700 000 01 01")
+    db = connect()
+    try:
+        c = db.execute("SELECT password_hash FROM Customer WHERE phone=?", (phone,)).fetchone()
+        if c and c["password_hash"]:
+            raise ApiError(409, "This phone already has an account - please log in")
+        if c:
+            raise ApiError(409, "This phone is already in the shop's records - ask the cashier to open your account")
+    finally:
+        db.close()
+
+    now = _now()
+    with SMS_LOCK:
+        existing = SMS_CODES.get(phone)
+        if existing and (now - existing["sent_at"]) < SMS_RESEND_SECONDS:
+            wait = int(SMS_RESEND_SECONDS - (now - existing["sent_at"])) + 1
+            raise ApiError(429, f"Please wait {wait}s before requesting another SMS code")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        SMS_CODES[phone] = {
+            "code": code,
+            "expires_at": now + SMS_TTL_SECONDS,
+            "sent_at": now,
+            "attempts": 0,
+        }
+
+    msg = f"CRM Loyalty verification code: {code}. Valid for 5 minutes."
+    try:
+        mode = _dispatch_sms(phone, msg)
+    except Exception:
+        with SMS_LOCK:
+            SMS_CODES.pop(phone, None)
+        raise
+
+    with SMS_LOCK:
+        SMS_LOG.append({"phone": phone, "code": code, "sent_at": now, "provider": mode})
+        if len(SMS_LOG) > 50:
+            del SMS_LOG[:-50]
+
+    res = {"ok": True, "phone": phone, "expires_in": SMS_TTL_SECONDS, "provider": mode}
+    if mode == "console":
+        res["demo_code"] = code
+    return res
+
+def _verify_client_sms(phone, code_raw):
+    code = str(code_raw or "").strip()
+    if not re.fullmatch(r"\d{6}", code):
+        raise ApiError(400, "Enter the 6-digit SMS verification code")
+    now = _now()
+    with SMS_LOCK:
+        entry = SMS_CODES.get(phone)
+        if not entry:
+            raise ApiError(400, "Request an SMS verification code first")
+        if entry["expires_at"] < now:
+            SMS_CODES.pop(phone, None)
+            raise ApiError(400, "SMS code has expired - request a new one")
+        if not secrets.compare_digest(entry["code"], code):
+            entry["attempts"] += 1
+            if entry["attempts"] >= SMS_MAX_ATTEMPTS:
+                SMS_CODES.pop(phone, None)
+                raise ApiError(429, "Too many wrong SMS codes - request a new code")
+            raise ApiError(400, "Wrong SMS verification code")
+        SMS_CODES.pop(phone, None)
+
 def _client_session(customer_id, name, phone):
     sid = secrets.token_urlsafe(24)
     SESSIONS[sid] = {"customer_id": customer_id, "username": phone, "role": "Client", "name": name, "last_seen": _now()}
     return sid, SESSIONS[sid]
 
 def client_register(data):
-    """A new client signs up alone: full name, phone, e-mail (required) and a checked password. He is logged in at once.
-    A phone that the shop already has in Customer cannot be taken over from the web page (there is no proof that the phone is his)."""
+    """A new client signs up alone: full name, phone, SMS verification code, e-mail (required) and a checked password.
+    He is logged in at once after verifying the SMS code."""
     name = str(data.get("full_name") or "").strip()
     phone = normalize_phone(data.get("phone"))
     email = str(data.get("email") or "").strip()
     password = data.get("password", "")
+    sms_code = data.get("sms_code", "")
     if not (2 <= len(name) <= 80): raise ApiError(400, "Full name must be 2-80 characters")
     if not phone: raise ApiError(400, "Phone must look like +7 700 000 01 01")
     if not email or len(email) > 100 or not EMAIL_RE.match(email): raise ApiError(400, "A valid e-mail is required")
@@ -259,6 +472,7 @@ def client_register(data):
             raise ApiError(409, "This phone already has an account - please log in")
         if c:
             raise ApiError(409, "This phone is already in the shop's records - ask the cashier to open your account")
+        _verify_client_sms(phone, sms_code)
         try:
             cid = db.execute("INSERT INTO Customer (full_name, phone, email, loyalty_points, last_updated, password_hash) VALUES (?,?,?,0,?,?)",
                              (name, phone, email, datetime.now().strftime("%Y-%m-%d"), hash_pw(password))).lastrowid
@@ -318,6 +532,7 @@ def client_change_password(user, data):
         if not row or not row["password_hash"] or not check_pw(str(old), row["password_hash"]):
             raise ApiError(403, "Current password is wrong")
         db.execute("UPDATE Customer SET password_hash=? WHERE customer_id=?", (hash_pw(new), user["customer_id"]))
+        cancel_other_sessions(user)                   # every other login of this client is closed; this one stays
         return {"ok": True}
     finally:
         db.close()
@@ -328,89 +543,265 @@ def list_products():
     rows = [dict(r) for r in db.execute("SELECT product_id, product_name, price, stock_qty FROM Product ORDER BY product_id")]
     db.close(); return rows
 
+def calculate_discount(total, loyalty_points):
+    """
+    Apply a 10% discount when:
+    1. Order total is at least $5,000.
+    2. Customer's bonus value is MORE than 30%
+       of the order total.
+
+    Bonus points are not spent by this discount.
+    """
+
+    total = Decimal(str(total))
+    bonus_value = Decimal(loyalty_points) * POINT_VALUE
+
+    if (
+        total >= MIN_DISCOUNT_ORDER
+        and bonus_value > total * DISCOUNT_BONUS_SHARE
+    ):
+        discount = total * LOYALTY_DISCOUNT_RATE
+
+        return discount.quantize(
+            Decimal("0.01"),
+            rounding=ROUND_DOWN
+        )
+
+    return Decimal("0.00")
+
+
 def whole(amount):
-    """Cut an amount down to a whole number (no rounding up, so the shop never gives more than the rule says)."""
-    return int(Decimal(amount).to_integral_value(rounding=ROUND_DOWN))
+    """
+    Cut an amount down to a whole number.
+    """
+    return int(
+        Decimal(amount).to_integral_value(
+            rounding=ROUND_DOWN
+        )
+    )
 
 def points_rules():
-    return {"points_rate": str(POINTS_RATE), "point_value": str(POINT_VALUE),
-            "max_redeem_share": str(MAX_REDEEM_SHARE), "max_earn_per_purchase": MAX_EARN_PER_PURCHASE}
+    return {
+        "points_rate": str(POINTS_RATE),
+        "point_value": str(POINT_VALUE),
+        "max_redeem_share": str(MAX_REDEEM_SHARE),
+        "max_earn_per_purchase": MAX_EARN_PER_PURCHASE,
+        "min_discount_order": str(MIN_DISCOUNT_ORDER),
+        "discount_bonus_share": str(DISCOUNT_BONUS_SHARE),
+        "discount_rate": str(LOYALTY_DISCOUNT_RATE),
+    }
+
 
 def record_purchase(user, data):
+    """Record a purchase atomically, including eligible loyalty discount."""
     try:
         customer_id = int(data.get("customer_id"))
         raw = data.get("items")
         pay = data.get("payment")
-        if not isinstance(raw, list) or not raw: raise ValueError
+        if not isinstance(raw, list) or not raw:
+            raise ValueError
+
         items = {}
-        for it in raw:
-            pid, qty = int(it["product_id"]), int(it["quantity"])
-            if not (1 <= qty <= 100): raise ValueError
-            items[pid] = items.get(pid, 0) + qty          # same product twice -> one line
+        for item in raw:
+            product_id = int(item["product_id"])
+            quantity = int(item["quantity"])
+            if not (1 <= quantity <= 100):
+                raise ValueError
+            items[product_id] = items.get(product_id, 0) + quantity
     except (TypeError, ValueError, KeyError):
-        raise ApiError(400, "Send customer_id and a list of items with product_id and quantity (1-100)")
+        raise ApiError(
+            400,
+            "Send customer_id and a list of items with product_id and quantity (1-100)"
+        )
+
     if pay not in ("approved", "declined"):
         raise ApiError(400, "payment must be 'approved' or 'declined'")
-    raw_pts = data.get("points_to_use", 0)
-    if raw_pts is None: raw_pts = 0
+
+    raw_points = data.get("points_to_use", 0)
+    if raw_points is None:
+        raw_points = 0
     try:
-        if isinstance(raw_pts, bool) or not isinstance(raw_pts, (int, str)): raise ValueError
-        points_use = int(raw_pts)
-        if points_use < 0: raise ValueError
-    except ValueError:
+        if isinstance(raw_points, bool) or not isinstance(raw_points, (int, str)):
+            raise ValueError
+        points_use = int(raw_points)
+        if points_use < 0:
+            raise ValueError
+    except (TypeError, ValueError):
         raise ApiError(400, "points_to_use must be a whole number, 0 or more")
 
     db = connect()
     try:
         db.execute("BEGIN")
-        if not db.execute("SELECT 1 FROM Customer WHERE customer_id=?", (customer_id,)).fetchone():
+
+        customer = db.execute(
+            "SELECT loyalty_points FROM Customer WHERE customer_id=?",
+            (customer_id,)
+        ).fetchone()
+
+        if not customer:
             raise ApiError(404, "Customer not found")
-        lines, total = [], Decimal("0")
-        for pid, qty in items.items():                    # prices come from the database, never from the browser
-            p = db.execute("SELECT product_name, price FROM Product WHERE product_id=?", (pid,)).fetchone()
-            if not p: raise ApiError(404, f"Product {pid} not found")
-            price = Decimal(str(p["price"])); total += price * qty
-            lines.append((pid, qty, price, p["product_name"]))
-        max_by_share = whole(total * MAX_REDEEM_SHARE / POINT_VALUE)
-        if points_use > max_by_share:                     # rule: points pay at most MAX_REDEEM_SHARE of the bill
-            raise ApiError(400, f"Points can pay at most {int(MAX_REDEEM_SHARE * 100)}% of the bill (max {max_by_share} points for this purchase)")
-        to_pay = total - POINT_VALUE * points_use         # the part of the bill paid in money
-        ref = "TX" + secrets.token_hex(4).upper()
+
+        lines = []
+        total = Decimal("0.00")
+
+        # Prices are read from the database, never trusted from the browser.
+        for product_id, quantity in items.items():
+            product = db.execute(
+                "SELECT product_name, price FROM Product WHERE product_id=?",
+                (product_id,)
+            ).fetchone()
+
+            if not product:
+                raise ApiError(404, f"Product {product_id} not found")
+
+            price = Decimal(str(product["price"]))
+            total += price * quantity
+            lines.append((product_id, quantity, price, product["product_name"]))
+
+        # Apply the promotional discount before bonus-point redemption.
+        discount = calculate_discount(total, customer["loyalty_points"])
+        discounted_total = total - discount
+
+        # Existing rule: bonus points can cover at most 30% of the discounted bill.
+        max_by_share = whole(
+            discounted_total * MAX_REDEEM_SHARE / POINT_VALUE
+        )
+
+        if points_use > max_by_share:
+            raise ApiError(
+                400,
+                f"Points can pay at most {int(MAX_REDEEM_SHARE * 100)}% "
+                f"of the discounted bill (max {max_by_share} points)"
+            )
+
+        to_pay = discounted_total - POINT_VALUE * points_use
+
+        payment_ref = "TX" + secrets.token_hex(4).upper()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # step 1: save Purchase
-        cur = db.execute("INSERT INTO Purchase (customer_id, employee_id, purchase_date, total_amount, payment_status, payment_ref) VALUES (?,?,?,?,?,?)",
-                         (customer_id, user["employee_id"], now, float(total), "approved", ref))
-        pid_new = cur.lastrowid
-        # step 2: save the item lines
-        for pid, qty, price, _ in lines:
-            db.execute("INSERT INTO Purchase_Item VALUES (?,?,?,?)", (pid_new, pid, qty, float(price)))
-        # step 3: reduce stock (fails when there is not enough)
-        for pid, qty, _, name in lines:
-            if db.execute("UPDATE Product SET stock_qty = stock_qty - ? WHERE product_id=? AND stock_qty >= ?", (qty, pid, qty)).rowcount == 0:
-                raise ApiError(409, f"Not enough stock for {name}")
-        # step 4: spend bonus points (atomic: the UPDATE only works when the customer has enough points)
+
+        # Save the original merchandise total and the discount separately.
+        purchase_cursor = db.execute(
+            """
+            INSERT INTO Purchase (
+                customer_id, employee_id, purchase_date, total_amount,
+                payment_status, payment_ref, discount_amount
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                customer_id,
+                user["employee_id"],
+                now,
+                float(total),
+                "approved",
+                payment_ref,
+                float(discount),
+            )
+        )
+        purchase_id = purchase_cursor.lastrowid
+
+        # Save purchase item lines.
+        for product_id, quantity, price, _name in lines:
+            db.execute(
+                "INSERT INTO Purchase_Item VALUES (?,?,?,?)",
+                (purchase_id, product_id, quantity, float(price))
+            )
+
+        # Reduce stock; fail and roll back if stock is insufficient.
+        for product_id, quantity, _price, product_name in lines:
+            updated = db.execute(
+                """
+                UPDATE Product
+                SET stock_qty = stock_qty - ?
+                WHERE product_id=? AND stock_qty >= ?
+                """,
+                (quantity, product_id, quantity)
+            )
+            if updated.rowcount == 0:
+                raise ApiError(409, f"Not enough stock for {product_name}")
+
+        # Spend bonus points, if requested.
         if points_use:
-            if db.execute("UPDATE Customer SET loyalty_points = loyalty_points - ? WHERE customer_id=? AND loyalty_points >= ?",
-                          (points_use, customer_id, points_use)).rowcount == 0:
+            updated = db.execute(
+                """
+                UPDATE Customer
+                SET loyalty_points = loyalty_points - ?
+                WHERE customer_id=? AND loyalty_points >= ?
+                """,
+                (points_use, customer_id, points_use)
+            )
+            if updated.rowcount == 0:
                 raise ApiError(409, "Not enough bonus points")
-            db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) VALUES (?,?,?,?,?)",
-                       (customer_id, pid_new, -points_use, "spent", now))
-        # step 5: payment result from the (simulated) card terminal - on "declined" the rollback also gives the points back
+
+            db.execute(
+                """
+                INSERT INTO Points_Log
+                    (customer_id, purchase_id, points_change, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (customer_id, purchase_id, -points_use, "spent", now)
+            )
+
+        # Simulated card terminal. A declined payment rolls back all changes.
         if pay == "declined":
             raise ApiError(402, "Payment declined - nothing was saved")
-        # step 6: earn points on the money actually paid (not on the part paid with points)
-        earned = min(MAX_EARN_PER_PURCHASE, whole(to_pay * POINTS_RATE / POINT_VALUE))
-        db.execute("UPDATE Customer SET loyalty_points = loyalty_points + ?, last_updated = ? WHERE customer_id=?", (earned, now[:10], customer_id))
+
+        # Cashback is earned only on the amount actually paid in money.
+        earned = min(
+            MAX_EARN_PER_PURCHASE,
+            whole(to_pay * POINTS_RATE / POINT_VALUE)
+        )
+
+        db.execute(
+            """
+            UPDATE Customer
+            SET loyalty_points = loyalty_points + ?, last_updated=?
+            WHERE customer_id=?
+            """,
+            (earned, now[:10], customer_id)
+        )
+
         if earned:
-            db.execute("INSERT INTO Points_Log (customer_id, purchase_id, points_change, reason, created_at) VALUES (?,?,?,?,?)",
-                       (customer_id, pid_new, earned, "earned", now))
+            db.execute(
+                """
+                INSERT INTO Points_Log
+                    (customer_id, purchase_id, points_change, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (customer_id, purchase_id, earned, "earned", now)
+            )
+
         db.execute("COMMIT")
-        points = db.execute("SELECT loyalty_points FROM Customer WHERE customer_id=?", (customer_id,)).fetchone()[0]
-        return {"purchase_id": pid_new, "payment_ref": ref, "total": float(total), "points_used": points_use, "amount_to_pay": float(to_pay),
-                "points_earned": earned, "loyalty_points": points,
-                "lines": [{"product": n, "quantity": q, "unit_price": float(p)} for _, q, p, n in lines]}
+
+        points_row = db.execute(
+            "SELECT loyalty_points FROM Customer WHERE customer_id=?",
+            (customer_id,)
+        ).fetchone()
+
+        return {
+            "purchase_id": purchase_id,
+            "payment_ref": payment_ref,
+            "total": float(total),
+            "discount_amount": float(discount),
+            "discount_percent": float(LOYALTY_DISCOUNT_RATE * 100 if discount else 0),
+            "total_after_discount": float(discounted_total),
+            "points_used": points_use,
+            "amount_to_pay": float(to_pay),
+            "points_earned": earned,
+            "loyalty_points": points_row["loyalty_points"],
+            "lines": [
+                {
+                    "product": name,
+                    "quantity": quantity,
+                    "unit_price": float(price),
+                }
+                for _product_id, quantity, price, name in lines
+            ],
+        }
+
     except Exception:
-        db.execute("ROLLBACK")                            # undo every step if anything failed
+        if db.in_transaction:
+            db.execute("ROLLBACK")
         raise
     finally:
         db.close()
@@ -439,7 +830,7 @@ def report_top(user, month):
     start, end = f"{y:04d}-{m:02d}-01", (f"{y+1:04d}-01-01" if m == 12 else f"{y:04d}-{m+1:02d}-01")
     db = connect()
     rows = [dict(r) for r in db.execute(
-        """SELECT c.customer_id, c.full_name, c.phone, COUNT(p.purchase_id) AS visits, SUM(p.total_amount) AS total_spent
+        """SELECT c.customer_id, c.full_name, c.phone, COUNT(p.purchase_id) AS visits, SUM(p.total_amount - COALESCE(p.discount_amount, 0)) AS total_spent
            FROM Customer c JOIN Purchase p ON p.customer_id = c.customer_id
            WHERE p.payment_status='approved' AND p.purchase_date >= ? AND p.purchase_date < ?
            GROUP BY c.customer_id, c.full_name, c.phone ORDER BY total_spent DESC LIMIT 3""", (start, end))]
@@ -539,8 +930,12 @@ def merge_customers(user, data):
         db.close()
 
 
+
 # ---------- HTTP ----------
-CLIENT_ROUTES = {("POST", "/api/logout"), ("GET", "/api/me"), ("GET", "/api/client/me"), ("GET", "/api/client/points"), ("POST", "/api/client/password")}
+CLIENT_ROUTES = {("POST", "/api/logout"), ("GET", "/api/me"), ("GET", "/api/client/me"), ("GET", "/api/client/points"), ("POST", "/api/client/password"), ("GET", "/api/rules")}
+
+
+#HTTP
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -586,7 +981,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"username": s["username"], "role": s["role"], "name": s["name"]},
                                   {"Set-Cookie": f"sid={sid}; HttpOnly; SameSite=Strict; Path=/"})
             if method == "POST" and u.path == "/api/register":
-                return self._send(201, register(self._body()))
+                return self._send(201, register(self._body(), self.client_address[0]))
+            if method == "POST" and u.path == "/api/client/send-sms":
+                return self._send(200, send_client_sms(self._body(), self.client_address[0]))
             if method == "POST" and u.path in ("/api/client/register", "/api/client/login"):
                 sid, s = (client_register(self._body()) if u.path.endswith("register") else client_login(self._body(), self.client_address[0]))
                 return self._send(201 if u.path.endswith("register") else 200, {"username": s["username"], "role": s["role"], "name": s["name"]},

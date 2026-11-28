@@ -1,5 +1,5 @@
-"""Security tests (Nurislam): login lock, session expiry, shop code for registration.
-Run:  python test_security.py     (4 tests; the clock is moved by the test, nobody waits 30 minutes)"""
+"""Security tests: IP-based login lock, session expiry, shop code for registration.
+Run: python test_security.py (the fake clock avoids waiting for lock/session expiry)."""
 import json, os, tempfile, threading, unittest, urllib.request, urllib.error
 import app
 
@@ -28,12 +28,21 @@ class SecurityTests(unittest.TestCase):
     def tearDown(self):
         import time; app._now = time.time
 
-    def test_01_sixth_wrong_attempt_is_refused_429(self):
+    def test_01_username_rotation_does_not_bypass_ip_lock(self):
         c = Api(self.base)
-        self.assertEqual([c.login("aruzhan", "wrong")[0] for _ in range(5)], [401] * 5)   # attempts 1-5: wrong password
-        self.assertEqual(c.login("aruzhan", "wrong")[0], 429)                             # attempt 6: locked
-        self.assertEqual(c.login("aruzhan", "cashier123")[0], 429)                        # even the right password is refused while locked
-        self.clock[0] += app.LOCK_SECONDS + 1                                             # after the lock time it works again
+        # Five failed attempts using five different usernames still share one IP counter.
+        self.assertEqual(
+            [c.login(f"random_user_{i}", "wrong")[0] for i in range(5)],
+            [401] * 5
+        )
+        # A different username and even a correct password cannot bypass the IP lock.
+        self.assertEqual(c.login("aruzhan", "cashier123")[0], 429)
+        # The same IP limit is shared by staff and customer login endpoints.
+        self.assertEqual(
+            c.call("POST", "/api/client/login", {"phone": "+7 700 000 01 01", "password": "wrong"})[0],
+            429
+        )
+        self.clock[0] += app.LOCK_SECONDS + 1
         self.assertEqual(c.login("aruzhan", "cashier123")[0], 200)
 
     def test_02_expired_session_gives_401(self):
