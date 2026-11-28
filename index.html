@@ -5,39 +5,81 @@
 </head><body>
 <header>
   <h1>CRM for Small Business</h1>
-  <small>Record a purchase for a loyalty customer</small>
+  <small>Loyalty program &amp; point-of-sale system</small>
 </header>
 
+<div id="authSwitch" class="portal-switch">
+  <button id="tabStaff" class="active" onclick="toggleClient('off')">Staff portal</button>
+  <button id="tabClientLogin" onclick="toggleClient('login')">Client log in</button>
+  <button id="tabClientReg" onclick="toggleClient('reg')">Client sign up (SMS)</button>
+</div>
+
 <div id="loginBox" class="box">
-  <h2>Log in</h2>
+  <h2>Staff log in</h2>
   <input id="u" placeholder="Username" autocomplete="username"> <input id="p" type="password" placeholder="Password" autocomplete="current-password">
   <button onclick="login()">Log in</button>
   <div id="loginMsg"></div>
-  <p><small>No account? <a href="#" onclick="toggleReg(true);return false">Register</a></small></p>
+  <p><small>No staff account? <a href="#" onclick="toggleReg(true);return false">Register with shop code</a></small></p>
   <p><small>Customer of the shop? <a href="#" onclick="toggleClient('login');return false">Client log in / sign up</a></small></p>
 </div>
 
 <div id="clLoginBox" class="box hidden">
   <h2>Client log in</h2>
-  <input id="clPhone" placeholder="Phone +7 700 000 01 01" size="22" autocomplete="tel"> <input id="clPw" type="password" placeholder="Password" autocomplete="current-password">
-  <button onclick="clientLogin()">Log in</button>
+  <p style="margin:0 0 12px"><small>Check your loyalty points balance, cashback value, and transaction history.</small></p>
+  <div class="form-grid">
+    <div class="field">
+      <label for="clPhone">Phone number</label>
+      <input id="clPhone" placeholder="+7 700 000 01 01" autocomplete="tel">
+    </div>
+    <div class="field">
+      <label for="clPw">Password</label>
+      <input id="clPw" type="password" placeholder="Your password" autocomplete="current-password">
+    </div>
+  </div>
+  <button onclick="clientLogin()">Log in to loyalty account</button>
   <div id="clLoginMsg"></div>
-  <p><small>New client? <a href="#" onclick="toggleClient('reg');return false">Sign up</a> &middot; Staff? <a href="#" onclick="toggleClient('off');return false">Staff log in</a></small></p>
+  <p><small>New client? <a href="#" onclick="toggleClient('reg');return false">Sign up with SMS verification</a> &middot; Staff? <a href="#" onclick="toggleClient('off');return false">Staff log in</a></small></p>
 </div>
 
 <div id="clRegBox" class="box hidden">
   <h2>Client sign up</h2>
-  <input id="crName" placeholder="Full name" autocomplete="name"> <input id="crPhone" placeholder="Phone +7 700 000 01 01" size="22" autocomplete="tel"><br>
-  <input id="crEmail" type="email" placeholder="E-mail" size="30" autocomplete="email"><br>
-  <input id="crPw" type="password" placeholder="Password (8+, letter and digit)" size="30" autocomplete="new-password">
-  <input id="crPw2" type="password" placeholder="Repeat password" autocomplete="new-password">
-  <button onclick="clientSignup()">Create account</button>
+  <p style="margin:0 0 14px"><small>Create a personal loyalty account. We send a 6-digit SMS code to verify your phone number.</small></p>
+  <div class="form-grid">
+    <div class="field">
+      <label for="crName">Full name</label>
+      <input id="crName" placeholder="e.g. Almas Zhaksybay" autocomplete="name">
+    </div>
+    <div class="field">
+      <label for="crEmail">E-mail</label>
+      <input id="crEmail" type="email" placeholder="name@example.com" autocomplete="email">
+    </div>
+  </div>
+  <div class="field" style="margin-bottom:10px">
+    <label for="crPhone">Phone number &amp; SMS verification</label>
+    <div class="sms-row">
+      <input id="crPhone" placeholder="+7 700 000 01 01" autocomplete="tel">
+      <button id="sendSmsBtn" type="button" class="secondary" onclick="sendClientSms()">Send SMS code</button>
+      <input id="crSmsCode" placeholder="6-digit SMS code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" style="max-width:170px">
+    </div>
+    <div id="smsStatus"></div>
+  </div>
+  <div class="form-grid">
+    <div class="field">
+      <label for="crPw">Password</label>
+      <input id="crPw" type="password" placeholder="8+ chars, letter and digit" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label for="crPw2">Repeat password</label>
+      <input id="crPw2" type="password" placeholder="Repeat password" autocomplete="new-password">
+    </div>
+  </div>
+  <button onclick="clientSignup()">Verify SMS &amp; create account</button>
   <div id="crMsg"></div>
   <p><small>Already have an account? <a href="#" onclick="toggleClient('login');return false">Log in</a></small></p>
 </div>
 
 <div id="regBox" class="box hidden">
-  <h2>Create an account</h2>
+  <h2>Create a staff account</h2>
   <input id="rn" placeholder="Full name" autocomplete="name"> <input id="ru" placeholder="Username (a-z, 0-9, _)" autocomplete="username"><br>
   <input id="rp" type="password" placeholder="Password (8+, letter and digit)" autocomplete="new-password" size="30">
   <input id="rp2" type="password" placeholder="Repeat password" autocomplete="new-password"><br>
@@ -48,14 +90,41 @@
 </div>
 
 <div id="clientApp" class="hidden">
-  <div class="box top"><div id="clWho"></div><div><button class="secondary" onclick="$('clPwBox').classList.toggle('hidden')">Change password</button> <button class="secondary" onclick="logout()">Log out</button></div></div>
-  <div id="clPwBox" class="box hidden"><h2>Change my password</h2>
-    <input id="ccp" type="password" placeholder="Current password" autocomplete="current-password">
-    <input id="cnp" type="password" placeholder="New password" autocomplete="new-password">
-    <input id="cnp2" type="password" placeholder="Repeat new password" autocomplete="new-password">
-    <button onclick="clientChangePw()">Save password</button><div id="clPwMsg"></div>
+  <div class="box top">
+    <div id="clWho"></div>
+    <div>
+      <button class="secondary" onclick="$('clPwBox').classList.toggle('hidden')">Change password</button>
+      <button class="secondary" onclick="logout()">Log out</button>
+    </div>
   </div>
-  <div class="box"><h2>My loyalty account</h2><div id="clInfo"></div><div id="clHist"></div></div>
+
+  <div id="clPwBox" class="box hidden">
+    <h2>Change my password</h2>
+    <div class="form-grid">
+      <div class="field"><label for="ccp">Current password</label><input id="ccp" type="password" placeholder="Current password" autocomplete="current-password"></div>
+      <div class="field"><label for="cnp">New password</label><input id="cnp" type="password" placeholder="8+ chars, letter and digit" autocomplete="new-password"></div>
+      <div class="field"><label for="cnp2">Repeat new password</label><input id="cnp2" type="password" placeholder="Repeat new password" autocomplete="new-password"></div>
+    </div>
+    <button onclick="clientChangePw()">Save password</button>
+    <div id="clPwMsg"></div>
+  </div>
+
+  <div id="clHero"></div>
+  <div id="clStats" class="stat-grid"></div>
+
+  <div class="box">
+    <div class="filter-bar">
+      <h2 style="margin:0">Points history</h2>
+      <div class="chip-group" id="clFilters">
+        <button type="button" class="chip active" onclick="filterClientHist('all', this)">All</button>
+        <button type="button" class="chip" onclick="filterClientHist('earned', this)">Earned (+)</button>
+        <button type="button" class="chip" onclick="filterClientHist('spent', this)">Spent (-)</button>
+        <button type="button" class="chip" onclick="filterClientHist('opening', this)">Opening</button>
+      </div>
+    </div>
+    <div id="clHist"></div>
+    <div id="clRulesBanner" class="rules-banner"></div>
+  </div>
 </div>
 
 <div id="app" class="hidden">
@@ -108,7 +177,7 @@
 </div>
 
 <script>
-let customer = null, products = [], rules = null;
+let customer = null, products = [], rules = null, clientRows = [], smsTimer = null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path, opts){
@@ -128,7 +197,7 @@ async function login(){
 }
 async function start(u){
   if(u.role === "Client") return startClient(u);
-  ["loginBox","clLoginBox","clRegBox"].forEach(id=>$(id).classList.add("hidden")); $("app").classList.remove("hidden");
+  ["loginBox","clLoginBox","clRegBox","authSwitch"].forEach(id=>$(id).classList.add("hidden")); $("app").classList.remove("hidden");
   $("who").innerHTML = `Logged in as <b>${esc(u.name)}</b> (${esc(u.role)})`;
   $("mgr").classList.toggle("hidden", u.role !== "Manager"); $("usr").classList.toggle("hidden", u.role !== "Manager");
   products = await api("/api/products");
@@ -220,26 +289,143 @@ async function listUsers(){ try{ $("usrOut").innerHTML = table(await api("/api/u
 function toggleClient(mode){ // 'login' | 'reg' | 'off'
   ["loginBox","regBox","clLoginBox","clRegBox"].forEach(id=>$(id).classList.add("hidden"));
   $({login:"clLoginBox", reg:"clRegBox", off:"loginBox"}[mode]).classList.remove("hidden");
+  $("tabStaff").classList.toggle("active", mode==="off");
+  $("tabClientLogin").classList.toggle("active", mode==="login");
+  $("tabClientReg").classList.toggle("active", mode==="reg");
   ["clLoginMsg","crMsg"].forEach(id=>show(id,""));
 }
+
+function startSmsCooldown(sec){
+  if(smsTimer) clearInterval(smsTimer);
+  const btn = $("sendSmsBtn");
+  let left = sec;
+  btn.disabled = true;
+  btn.textContent = `Resend (${left}s)`;
+  smsTimer = setInterval(()=>{
+    left -= 1;
+    if(left <= 0){
+      clearInterval(smsTimer);
+      smsTimer = null;
+      btn.disabled = false;
+      btn.textContent = "Send SMS code";
+    } else {
+      btn.textContent = `Resend (${left}s)`;
+    }
+  }, 1000);
+}
+
+async function sendClientSms(){
+  const phone = $("crPhone").value.trim();
+  if(!phone){
+    $("smsStatus").innerHTML = `<div class="sms-badge err">Enter your phone number first</div>`;
+    return;
+  }
+  try{
+    const r = await api("/api/client/send-sms", {method:"POST", body:JSON.stringify({phone})});
+    const extra = r.demo_code ? ` &middot; Demo SMS code: <b>${esc(r.demo_code)}</b>` : " &middot; Check your phone messages";
+    $("smsStatus").innerHTML = `<div class="sms-badge">SMS sent to <b>${esc(r.phone)}</b> (valid 5 min)${extra}</div>`;
+    $("crSmsCode").focus();
+    startSmsCooldown(30);
+  }catch(e){
+    $("smsStatus").innerHTML = `<div class="sms-badge err">${esc(e.message)}</div>`;
+  }
+}
+
 async function clientSignup(){ // the server checks everything again; these checks only give a faster answer
   if($("crPw").value !== $("crPw2").value) return show("crMsg","Passwords do not match",true);
-  try{ const u = await api("/api/client/register",{method:"POST",body:JSON.stringify({full_name:$("crName").value,phone:$("crPhone").value,email:$("crEmail").value,password:$("crPw").value})}); start(u); }
-  catch(e){ show("crMsg", esc(e.message), true); }
+  if(!$("crSmsCode").value.trim()) return show("crMsg","Enter the 6-digit SMS verification code",true);
+  try{
+    const u = await api("/api/client/register",{
+      method:"POST",
+      body:JSON.stringify({
+        full_name:$("crName").value,
+        phone:$("crPhone").value,
+        email:$("crEmail").value,
+        sms_code:$("crSmsCode").value.trim(),
+        password:$("crPw").value
+      })
+    });
+    start(u);
+  }catch(e){ show("crMsg", esc(e.message), true); }
 }
 async function clientLogin(){
   try{ const u = await api("/api/client/login",{method:"POST",body:JSON.stringify({phone:$("clPhone").value,password:$("clPw").value})}); start(u); }
   catch(e){ show("clLoginMsg", esc(e.message), true); }
 }
-async function startClient(u){
-  ["loginBox","regBox","clLoginBox","clRegBox","app"].forEach(id=>$(id).classList.add("hidden")); $("clientApp").classList.remove("hidden");
-  $("clWho").innerHTML = `Logged in as <b>${esc(u.name)}</b> (Client)`;
-  const me = await api("/api/client/me");
-  $("clInfo").innerHTML = `<p style="margin:0 0 6px">Phone: <b>${esc(me.phone)}</b> &middot; E-mail: <b>${esc(me.email || "-")}</b></p><p class="total">Bonus points: ${me.loyalty_points} <small>(= $${(me.loyalty_points/100).toFixed(2)})</small></p>`;
-  try{ const rows = await api("/api/client/points");
-    $("clHist").innerHTML = rows.length ? "<p style='margin:14px 0 4px'><small>Points history (newest first)</small></p>" + table(rows.map(r=>({When:r.created_at, Change:(r.points_change>0?"+":"")+r.points_change, Reason:r.reason}))) : "<small>No points history yet.</small>";
-  }catch(e){ $("clHist").innerHTML = ""; }
+
+function renderClientHistory(rows){
+  if(!rows.length){
+    $("clHist").innerHTML = "<div class='msg'>No points transactions for this filter yet. Show your phone number at checkout to earn 3% cashback!</div>";
+    return;
+  }
+  const html = rows.map(r => {
+    const isPos = r.points_change > 0;
+    const badge = isPos ? `<span class="badge-plus">+${r.points_change}</span>` : `<span class="badge-minus">${r.points_change}</span>`;
+    const val = `$${(Math.abs(r.points_change)/100).toFixed(2)}`;
+    const purchase = r.purchase_id ? `#${r.purchase_id}` : "&mdash;";
+    return `<tr><td>${esc(r.created_at)}</td><td>${badge}</td><td>${val}</td><td>${esc(r.reason)}</td><td>${purchase}</td></tr>`;
+  }).join("");
+  $("clHist").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Date &amp; time</th><th>Points</th><th>Value</th><th>Reason</th><th>Receipt ID</th></tr></thead><tbody>${html}</tbody></table></div>`;
 }
+
+function filterClientHist(type, btn){
+  document.querySelectorAll("#clFilters .chip").forEach(c=>c.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const filtered = type === "all" ? clientRows : clientRows.filter(r => r.reason === type);
+  renderClientHistory(filtered);
+}
+
+async function startClient(u){
+  ["loginBox","regBox","clLoginBox","clRegBox","app","authSwitch"].forEach(id=>$(id).classList.add("hidden"));
+  $("clientApp").classList.remove("hidden");
+  $("clWho").innerHTML = `Welcome, <b>${esc(u.name)}</b> <small>(Client loyalty portal)</small>`;
+  const me = await api("/api/client/me");
+  let rInfo = {points_rate:"0.03", point_value:"0.01", max_redeem_share:"0.30", max_earn_per_purchase:5000};
+  try{ rInfo = await api("/api/rules"); }catch(e){}
+  const ptVal = parseFloat(rInfo.point_value || "0.01");
+  const usdBalance = (me.loyalty_points * ptVal).toFixed(2);
+
+  $("clHero").innerHTML = `
+    <div class="client-hero">
+      <div>
+        <h2>${esc(me.full_name)}</h2>
+        <div class="sub">Phone: <b>${esc(me.phone)}</b> &middot; E-mail: <b>${esc(me.email || "-")}</b></div>
+        <div class="sub" style="margin-top:6px">Show your phone number at the cashier to earn &amp; spend bonus points.</div>
+      </div>
+      <div class="balance-card">
+        <div class="lbl">Available balance</div>
+        <div class="pts">${me.loyalty_points} pts</div>
+        <div class="usd">= $${usdBalance} discount value</div>
+      </div>
+    </div>`;
+
+  try{ clientRows = await api("/api/client/points"); }catch(e){ clientRows = []; }
+  const totalEarned = clientRows.filter(r=>r.points_change>0).reduce((s,r)=>s+r.points_change, 0);
+  const totalSpent = clientRows.filter(r=>r.points_change<0).reduce((s,r)=>s+Math.abs(r.points_change), 0);
+
+  $("clStats").innerHTML = `
+    <div class="stat-card">
+      <div class="stat-lbl">Total earned</div>
+      <div class="stat-val">+${totalEarned} pts</div>
+      <div class="stat-sub">$${(totalEarned*ptVal).toFixed(2)} cashback</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Total redeemed</div>
+      <div class="stat-val">${totalSpent} pts</div>
+      <div class="stat-sub">$${(totalSpent*ptVal).toFixed(2)} saved</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Last activity</div>
+      <div class="stat-val" style="font-size:16px">${esc(me.last_updated || "-")}</div>
+      <div class="stat-sub">Account verified via SMS</div>
+    </div>`;
+
+  renderClientHistory(clientRows);
+  const earnPct = Math.round(parseFloat(rInfo.points_rate || "0.03") * 100);
+  const maxPct = Math.round(parseFloat(rInfo.max_redeem_share || "0.30") * 100);
+  $("clRulesBanner").innerHTML = `<b>Loyalty program rules:</b> Earn <b>${earnPct}% cashback</b> in points on money paid (1 point = $${ptVal.toFixed(2)}). You can pay up to <b>${maxPct}%</b> of any purchase using your bonus points (max ${rInfo.max_earn_per_purchase} points earned per receipt).`;
+}
+
 async function clientChangePw(){
   if($("cnp").value !== $("cnp2").value) return show("clPwMsg","New passwords do not match",true);
   try{ await api("/api/client/password",{method:"POST",body:JSON.stringify({current_password:$("ccp").value,new_password:$("cnp").value})});

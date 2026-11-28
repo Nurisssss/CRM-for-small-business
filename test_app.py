@@ -266,5 +266,161 @@ class CrmTests(unittest.TestCase):
         s, _ = self.emp.call("POST", "/api/customer/register", {"full_name": "A", "phone": "+7 707 333 44 55"})
         self.assertEqual(s, 400)
 
+    # --- Purchase validation & transaction details (Tests 42-49) ---
+    def buy(self, items, payment="approved", customer_id=3, **extra):
+        return self.emp.call("POST", "/api/purchase", {"customer_id": customer_id, "items": items, "payment": payment, **extra})
+
+    def test_42_quantity_limits_0_and_101_refused(self):
+        before = self.state()
+        self.assertEqual(self.buy([{"product_id": 1, "quantity": 0}])[0], 400)
+        self.assertEqual(self.buy([{"product_id": 1, "quantity": 101}])[0], 400)
+        self.assertEqual(self.state(), before)
+
+    def test_43_invalid_payment_value_refused(self):
+        before = self.state()
+        s, j = self.buy([{"product_id": 1, "quantity": 1}], payment="maybe")
+        self.assertEqual(s, 400)
+        self.assertIn("payment", j["error"])
+        self.assertEqual(self.state(), before)
+
+    def test_44_unknown_product_rolls_back_whole_purchase(self):
+        before = self.state()
+        s, j = self.buy([{"product_id": 1, "quantity": 1}, {"product_id": 999, "quantity": 1}])
+        self.assertEqual((s, j["error"]), (404, "Product 999 not found"))
+        self.assertEqual(self.state(), before)          # coffee stock was not reduced, no Purchase saved
+
+    def test_45_same_product_twice_becomes_one_line(self):
+        s, j = self.buy([{"product_id": 2, "quantity": 1}, {"product_id": 2, "quantity": 2}])
+        self.assertEqual(s, 201)
+        self.assertEqual(len(j["lines"]), 1)
+        self.assertEqual((j["lines"][0]["quantity"], j["total"]), (3, 19.5))
+        db = app.connect()
+        n = db.execute("SELECT COUNT(*) FROM Purchase_Item WHERE purchase_id=?", (j["purchase_id"],)).fetchone()[0]
+        db.close()
+        self.assertEqual(n, 1)
+
+    def test_46_price_from_browser_is_ignored(self):
+        s, j = self.buy([{"product_id": 2, "quantity": 2, "price": 0.01}, {"product_id": 3, "quantity": 1, "unit_price": 0}])
+        self.assertEqual(s, 201)
+        self.assertEqual(j["total"], 17.0)              # 2 x 6.50 + 1 x 4.00 from the database
+
+    def test_47_bad_points_to_use_refused(self):
+        before = self.state()
+        for bad in (-5, 1.5, True, "abc", [10]):
+            s, _ = self.buy([{"product_id": 1, "quantity": 1}], customer_id=1, points_to_use=bad)
+            self.assertEqual(s, 400, repr(bad))
+        self.assertEqual(self.state(), before)
+
+    def test_48_not_enough_points_rolls_back(self):
+        db = app.connect()
+        pts = db.execute("SELECT loyalty_points FROM Customer WHERE customer_id=3").fetchone()[0]
+        stock = db.execute("SELECT stock_qty FROM Product WHERE product_id=1").fetchone()[0]
+        db.close()
+        s, j = self.buy([{"product_id": 1, "quantity": 3}], points_to_use=pts + 1)   # $54: up to 1620 points allowed by the 30 % rule
+        self.assertEqual((s, j["error"]), (409, "Not enough bonus points"))
+        db = app.connect()
+        after = (db.execute("SELECT loyalty_points FROM Customer WHERE customer_id=3").fetchone()[0],
+                 db.execute("SELECT stock_qty FROM Product WHERE product_id=1").fetchone()[0])
+        db.close()
+        self.assertEqual(after, (pts, stock))
+
+    def test_49_points_log_rows_written_for_purchase(self):
+        s, j = self.buy([{"product_id": 2, "quantity": 1}], customer_id=2, points_to_use=10)
+        self.assertEqual(s, 201)
+        s, hist = self.emp.call("GET", "/api/points-log?customer_id=2")
+        rows = {r["reason"]: r for r in hist if r["purchase_id"] == j["purchase_id"]}
+        self.assertEqual(rows["spent"]["points_change"], -10)
+        self.assertEqual(rows["earned"]["points_change"], j["points_earned"])
+        s, checks = self.mgr.call("GET", "/api/report/checks")
+        self.assertEqual(checks["points_mismatches"], [])   # balance still equals the ledger
+
+    # --- Points history, reports, session, notes, merge (Tests 50-56) ---
+    def test_50_points_log_bad_or_unknown_customer(self):
+        self.assertEqual(self.emp.call("GET", "/api/points-log?customer_id=abc")[0], 400)
+        self.assertEqual(self.emp.call("GET", "/api/points-log?customer_id=777")[0], 404)
+
+    def test_51_report_bad_month_format_refused(self):
+        for m in ("2026-13", "2026-1", "october", ""):
+            self.assertEqual(self.mgr.call("GET", f"/api/report/top?month={m}")[0], 400, m)
+
+    def test_52_report_month_without_purchases_is_empty(self):
+        s, j = self.mgr.call("GET", "/api/report/top?month=2025-01")
+        self.assertEqual((s, j), (200, []))
+
+    def test_53_logout_ends_employee_session(self):
+        cli = Api(self.base)
+        self.assertEqual(cli.login("aruzhan", "cashier123")[0], 200)
+        self.assertEqual(cli.call("GET", "/api/products")[0], 200)
+        self.assertEqual(cli.call("POST", "/api/logout", {})[0], 200)
+        self.assertEqual(cli.call("GET", "/api/products")[0], 401)
+
+    def test_54_me_shows_role_without_internal_fields(self):
+        s, j = self.mgr.call("GET", "/api/me")
+        self.assertEqual((s, j["role"], j["username"]), (200, "Manager", "daniyar"))
+        self.assertNotIn("last_seen", j)
+        self.assertNotIn("password_hash", j)
+
+    def test_55_customer_note_empty_or_too_long_refused(self):
+        self.assertEqual(self.emp.call("POST", "/api/customer/notes", {"customer_id": 1, "note": "   "})[0], 400)
+        self.assertEqual(self.emp.call("POST", "/api/customer/notes", {"customer_id": 1, "note": "x" * 256})[0], 400)
+        self.assertEqual(self.emp.call("POST", "/api/customer/notes", {"customer_id": 1, "note": "x" * 255})[0], 201)
+
+    def test_56_merge_with_self_or_unknown_customer_refused(self):
+        s, j = self.mgr.call("POST", "/api/admin/merge-customers", {"source_id": 2, "target_id": 2})
+        self.assertEqual(s, 400)
+        s, j = self.mgr.call("POST", "/api/admin/merge-customers", {"source_id": 777, "target_id": 2})
+        self.assertEqual((s, j["error"]), (404, "Customer not found"))
+        self.assertEqual(self.emp.call("GET", "/api/customer?phone=%2B7%20700%20000%2001%2002")[0], 200)   # customer 2 still there
+
+class DiscountBusinessLogicTests(unittest.TestCase):
+    """Unit tests for the loyalty-discount business rule."""
+
+    def test_no_discount_when_order_is_below_5000(self):
+        self.assertEqual(
+            app.calculate_discount(Decimal("4999.99"), 500000),
+            Decimal("0.00"),
+        )
+
+    def test_no_discount_when_bonus_value_is_exactly_30_percent(self):
+        # 150,000 points * $0.01 = $1,500 = exactly 30% of $5,000.
+        self.assertEqual(
+            app.calculate_discount(Decimal("5000.00"), 150000),
+            Decimal("0.00"),
+        )
+
+    def test_discount_when_bonus_value_is_more_than_30_percent(self):
+        # 150,001 points = $1,500.01, strictly above 30%.
+        self.assertEqual(
+            app.calculate_discount(Decimal("5000.00"), 150001),
+            Decimal("500.00"),
+        )
+
+    def test_discount_for_order_above_5000(self):
+        self.assertEqual(
+            app.calculate_discount(Decimal("10000.00"), 300001),
+            Decimal("1000.00"),
+        )
+
+    def test_no_discount_when_bonus_balance_is_too_low(self):
+        self.assertEqual(
+            app.calculate_discount(Decimal("5000.00"), 100000),
+            Decimal("0.00"),
+        )
+
+    def test_order_exactly_5000_is_eligible_if_bonus_threshold_is_met(self):
+        self.assertEqual(
+            app.calculate_discount(Decimal("5000.00"), 150100),
+            Decimal("500.00"),
+        )
+
+    def test_whole_keeps_existing_round_down_behavior(self):
+        self.assertEqual(app.whole(Decimal("12.99")), 12)
+
+    def test_points_rules_exposes_discount_configuration(self):
+        rules = app.points_rules()
+        self.assertEqual(rules["min_discount_order"], "5000.00")
+        self.assertEqual(rules["discount_bonus_share"], "0.30")
+        self.assertEqual(rules["discount_rate"], "0.10")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
